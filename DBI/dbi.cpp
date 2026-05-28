@@ -98,7 +98,7 @@ double* DBI_process(double** adc_data, int len_out, int len_in, double** w_miso,
 
     // 步骤7: MISO-FFE均衡 —— LMS自适应多通道均衡
     printf("carrying out MISO_FFE ...\n");
-    MISO_FFT_STR dbi_ffe = MISO_FFE(dbi_upc, dbi_upc[0], len_equalizer, 0.01);
+    MISO_FFT_STR dbi_ffe = MISO_FFE(dbi_upc, dbi_upc[0], len_equalizer, 0.01, ch_num);
     printf("finished MISO_FFE\n\n");
 
     // 步骤8: 通道间同步对齐 —— 补偿通道间延迟差

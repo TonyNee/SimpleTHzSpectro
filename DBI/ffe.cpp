@@ -60,8 +60,7 @@ FFT_STR FFE(double* in, double* train, int TAP_LENGTH, int SYMBOL_WIDTH, double 
     return(ffe_out);
 }
 
-MISO_FFT_STR MISO_FFE(double** in, double* train, int TAP_LENGTH, double u) {
-    int group_num = static_cast<int>(malloc_usable_size(in) / sizeof(*(in)));
+MISO_FFT_STR MISO_FFE(double** in, double* train, int TAP_LENGTH, double u, int group_num) {
     int len_in = static_cast<int>(malloc_usable_size(*(in)) / sizeof(**(in)));
     int len_train = static_cast<int>(malloc_usable_size(train) / sizeof(double));
     assert(len_in == len_train);
