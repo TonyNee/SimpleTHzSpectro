@@ -96,11 +96,31 @@ mingw32-make -j8
 
 ### Windows 打包发布
 
-```cmd
-cd build
-windeployqt --release SimpleSpectro.exe
-:: 手动复制缺失的 MinGW 运行时 DLL 到发布目录
+`windeployqt` 可能无法自动找到平台插件，需要手动复制所有依赖：
+
+```powershell
+# 在 build 目录下执行
+
+# 1. 平台插件 (必须)
+mkdir platforms
+copy D:\Qt5.15\5.15.2\mingw81_64\plugins\platforms\qwindows.dll platforms\
+
+# 2. Qt DLL
+copy D:\Qt5.15\5.15.2\mingw81_64\bin\Qt5Core.dll .
+copy D:\Qt5.15\5.15.2\mingw81_64\bin\Qt5Gui.dll .
+copy D:\Qt5.15\5.15.2\mingw81_64\bin\Qt5Network.dll .
+copy D:\Qt5.15\5.15.2\mingw81_64\bin\Qt5Widgets.dll .
+
+# 3. MinGW 运行时
+copy D:\Qt5.15\5.15.2\mingw81_64\bin\libgcc_s_seh-1.dll .
+copy D:\Qt5.15\5.15.2\mingw81_64\bin\libstdc++-6.dll .
+copy D:\Qt5.15\5.15.2\mingw81_64\bin\libwinpthread-1.dll .
+
+# 4. 配置文件
+copy ..\Config .\Config -Recurse
 ```
+
+> **注意**: Qt 安装路径 `D:\Qt5.15\5.15.2\mingw81_64` 请根据实际环境修改。Qt6 用户路径类似 `D:\Qt\6.x\mingw_64`。
 
 ## 运行
 
