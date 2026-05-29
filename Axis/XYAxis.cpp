@@ -170,7 +170,7 @@ double XYAxis::valueToPx(double value) const
 /** @brief 绘制坐标轴（根据位置分发到具体绘制函数） */
 void XYAxis::draw(QPainter *painter)
 {
-    painter->setFont(QFont("sans-serif", 11, 1));
+    painter->setFont(QFont("sans-serif", 13, 1));
     painter->setPen(QColor(255, 255, 255));
     switch (this->getAxisPosition())
     {

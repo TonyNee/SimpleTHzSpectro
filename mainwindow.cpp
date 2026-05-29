@@ -215,7 +215,7 @@ void MainWindow::setupUI()
     m_logView->setReadOnly(true);
     m_logView->setMaximumHeight(120);
     m_logView->setStyleSheet(
-        "QTextEdit { background-color: #1a1a2e; color: #aaa; font-size: 11px; }");
+        "QTextEdit { background-color: #1a1a2e; color: #aaa; font-size: 13px; }");
     bottomSplitter->addWidget(m_logView);
 
     bottomSplitter->setStretchFactor(0, 1);

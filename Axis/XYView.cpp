@@ -27,7 +27,7 @@ void XYView::paintEvent(QPaintEvent *event)
     QPainter painter(this);
 
     painter.fillRect(plotArea, QColor(0, 0, 0));
-    painter.setFont(QFont("sans-serif", 11, 1));
+    painter.setFont(QFont("sans-serif", 13, 1));
 
     // 绘制网格
     painter.setPen(QColor(120, 120, 120));
