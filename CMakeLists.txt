@@ -95,11 +95,6 @@ if(WIN32)
     configure_file(${CMAKE_CURRENT_SOURCE_DIR}/app.rc
                    ${CMAKE_CURRENT_BINARY_DIR}/app_build.rc COPYONLY)
     target_sources(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/app_build.rc)
-    # MinGW: skip preprocessor to avoid windres path-with-spaces bug
-    if(MINGW)
-        set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/app_build.rc PROPERTIES
-            COMPILE_FLAGS "--no-preprocess")
-    endif()
     if(MSVC)
         target_compile_definitions(${PROJECT_NAME} PRIVATE _CRT_SECURE_NO_WARNINGS _USE_MATH_DEFINES)
     endif()
