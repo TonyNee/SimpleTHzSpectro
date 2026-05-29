@@ -19,7 +19,13 @@ MainWindow::MainWindow(QWidget *parent)
 
     m_xyView = new XYView(this);
     m_udpReceiver = new UdpReceiver(this);
-    m_analysis = new Analysis(this);
+    m_analysis = new Analysis(nullptr);  // 无parent，将移入独立线程
+
+    // 将Analysis移入独立线程，避免DBI阻塞UI
+    m_analysisThread = new QThread(this);
+    m_analysis->moveToThread(m_analysisThread);
+    connect(m_analysisThread, &QThread::finished, m_analysisThread, &QObject::deleteLater);
+    m_analysisThread->start();
 
     m_autoPlayTimer = new QTimer(this);
     m_autoPlayTimer->setInterval(83);  // 12 fps
@@ -33,26 +39,19 @@ MainWindow::MainWindow(QWidget *parent)
 
     setupUI();
 
-    // UDP data -> Analysis -> XYView
+    // 注册跨线程信号类型
+    qRegisterMetaType<QVector<QByteArray>>("QVector<QByteArray>");
+
+    // UDP data -> (主线程) 发射信号 -> Analysis线程处理
+    connect(this, &MainWindow::processData, m_analysis, &Analysis::processPcapData);
     connect(m_udpReceiver, &UdpReceiver::dataReady, this, [this]() {
         m_progressBar->setValue(50);
         m_progressBar->setFormat("Stage 2/2 — DBI Processing...");
-        QApplication::processEvents();
 
-        m_analysis->processPcapData(m_udpReceiver->getPcapData());
+        m_processingNewData = true;
+        // 跨线程发送数据到Analysis线程处理 (queued connection自动排队)
+        emit processData(m_udpReceiver->getPcapData());
         m_udpReceiver->clearBuffer();
-
-        m_progressBar->setValue(90);
-        m_progressBar->setFormat("Stage 2/2 — Segmentation...");
-
-        // 新数据到达，启动自动播放
-        m_isPlaying = true;
-        m_autoPlayTimer->start();
-        m_btnStop->setText("Stop");
-        m_btnStop->setStyleSheet(
-            "QPushButton { background-color: #f44336; color: white; font-weight: bold;"
-            " padding: 6px 0px; border-radius: 4px; }");
-        m_btnStop->setEnabled(true);
     });
 
     connect(m_analysis, &Analysis::waveDataReady, this, &MainWindow::onWaveDataReady);
@@ -71,15 +70,17 @@ MainWindow::MainWindow(QWidget *parent)
         m_btnStop->setText("Stop");
         m_btnStop->setStyleSheet(
             "QPushButton { background-color: #f44336; color: white; font-weight: bold;"
-            " padding: 6px 0px; border-radius: 4px; }");
+            " padding: 8px 0px; border-radius: 4px; }");
         m_btnStop->setEnabled(true);
     }
 
-    resize(1100, 700);
+    resize(1250, 900);
 }
 
 MainWindow::~MainWindow()
 {
+    m_analysisThread->quit();
+    m_analysisThread->wait();
 }
 
 void MainWindow::setupUI()
@@ -95,78 +96,78 @@ void MainWindow::setupUI()
     // UDP config
     topLayout->addWidget(new QLabel("Local IP:"));
     m_editBindIP = new QLineEdit("10.10.229.1");
-    m_editBindIP->setMaximumWidth(110);
+    m_editBindIP->setMaximumWidth(185);
     topLayout->addWidget(m_editBindIP);
     topLayout->addWidget(new QLabel("Port:"));
     m_editBindPort = new QLineEdit("8080");
-    m_editBindPort->setMaximumWidth(60);
+    m_editBindPort->setMaximumWidth(75);
     topLayout->addWidget(m_editBindPort);
     topLayout->addWidget(new QLabel("ADC IP:"));
     m_editAdcIP = new QLineEdit("10.10.229.11");
-    m_editAdcIP->setMaximumWidth(110);
+    m_editAdcIP->setMaximumWidth(185);
     topLayout->addWidget(m_editAdcIP);
     topLayout->addWidget(new QLabel("ADC Port:"));
     m_editAdcPort = new QLineEdit("5506");
-    m_editAdcPort->setMaximumWidth(60);
+    m_editAdcPort->setMaximumWidth(75);
     topLayout->addWidget(m_editAdcPort);
 
     // Step 1: Bind
     m_btnStepBind = new QPushButton("1. Bind NET");
-    m_btnStepBind->setFixedWidth(140);
+    m_btnStepBind->setFixedWidth(185);
     m_btnStepBind->setStyleSheet(
         "QPushButton { background-color: #2196F3; color: white; font-weight: bold;"
-        " padding: 6px 0px; border-radius: 4px; }");
+        " padding: 8px 0px; border-radius: 4px; }");
     topLayout->addWidget(m_btnStepBind);
 
-    topLayout->addSpacing(20);
+    topLayout->addSpacing(24);
 
     // Sample time + Step 2: Trigger ADC
     topLayout->addWidget(new QLabel("Sample(µs):"));
     m_spinSampleTime = new QSpinBox();
     m_spinSampleTime->setRange(1, 100000);
     m_spinSampleTime->setValue(5);
-    m_spinSampleTime->setMaximumWidth(70);
+    m_spinSampleTime->setMaximumWidth(85);
     topLayout->addWidget(m_spinSampleTime);
 
     m_btnStepTrigger = new QPushButton("2. Trigger ADC");
-    m_btnStepTrigger->setFixedWidth(140);
+    m_btnStepTrigger->setFixedWidth(185);
     m_btnStepTrigger->setStyleSheet(
         "QPushButton { background-color: #FF9800; color: white; font-weight: bold;"
-        " padding: 6px 0px; border-radius: 4px; }");
+        " padding: 8px 0px; border-radius: 4px; }");
     topLayout->addWidget(m_btnStepTrigger);
 
-    topLayout->addSpacing(20);
+    topLayout->addSpacing(24);
 
     // Step 3: Save CSV
     m_btnStepSave = new QPushButton("3. Save CSV");
-    m_btnStepSave->setFixedWidth(140);
+    m_btnStepSave->setFixedWidth(185);
     m_btnStepSave->setStyleSheet(
         "QPushButton { background-color: #4CAF50; color: white; font-weight: bold;"
-        " padding: 6px 0px; border-radius: 4px; }");
+        " padding: 8px 0px; border-radius: 4px; }");
     topLayout->addWidget(m_btnStepSave);
 
-    topLayout->addSpacing(12);
+    topLayout->addSpacing(16);
 
     // Clear data
     m_btnClear = new QPushButton("Clear");
-    m_btnClear->setFixedWidth(70);
+    m_btnClear->setFixedWidth(85);
     m_btnClear->setStyleSheet(
         "QPushButton { background-color: #9C27B0; color: white; font-weight: bold;"
-        " padding: 6px 0px; border-radius: 4px; }");
+        " padding: 8px 0px; border-radius: 4px; }");
     topLayout->addWidget(m_btnClear);
 
-    topLayout->addSpacing(20);
+    topLayout->addSpacing(24);
 
     // Frame nav: Prev + Stop + Next
     m_btnPrevFrame = new QPushButton("< Prev");
     topLayout->addWidget(m_btnPrevFrame);
 
     m_btnStop = new QPushButton("Stop");
-    m_btnStop->setFixedWidth(70);
+    m_btnStop->setFixedWidth(85);
     m_btnStop->setEnabled(false);
     m_btnStop->setStyleSheet(
         "QPushButton { background-color: #757575; color: white; font-weight: bold;"
-        " padding: 6px 0px; border-radius: 4px; }"
+        " padding: 8px 0px; border-radius: 4px; }"
         "QPushButton:enabled { background-color: #f44336; color: white; }");
     topLayout->addWidget(m_btnStop);
 
@@ -180,7 +181,7 @@ void MainWindow::setupUI()
     m_spinFrameId = new QSpinBox();
     m_spinFrameId->setMinimum(0);
     m_spinFrameId->setValue(0);
-    m_spinFrameId->setMaximumWidth(60);
+    m_spinFrameId->setMaximumWidth(75);
     topLayout->addWidget(m_spinFrameId);
     m_labelFrameInfo = new QLabel("0 / 0");
     topLayout->addWidget(m_labelFrameInfo);
@@ -196,7 +197,7 @@ void MainWindow::setupUI()
     m_editCalibDir->setReadOnly(true);
     calibPathLayout->addWidget(m_editCalibDir);
     QPushButton* btnCalibDir = new QPushButton("...");
-    btnCalibDir->setMaximumWidth(30);
+    btnCalibDir->setMaximumWidth(36);
     calibPathLayout->addWidget(btnCalibDir);
     pathLayout->addWidget(calibGroup);
 
@@ -206,7 +207,7 @@ void MainWindow::setupUI()
     m_editFilterDir->setReadOnly(true);
     filterPathLayout->addWidget(m_editFilterDir);
     QPushButton* btnFilterDir = new QPushButton("...");
-    btnFilterDir->setMaximumWidth(30);
+    btnFilterDir->setMaximumWidth(36);
     filterPathLayout->addWidget(btnFilterDir);
     pathLayout->addWidget(filterGroup);
 
@@ -220,7 +221,7 @@ void MainWindow::setupUI()
     m_progressBar->setRange(0, 100);
     m_progressBar->setValue(0);
     m_progressBar->setFormat("Ready");
-    m_progressBar->setMaximumHeight(20);
+    m_progressBar->setMaximumHeight(26);
     m_progressBar->setStyleSheet(
         "QProgressBar { border: 1px solid #444; border-radius: 3px; background: #1a1a2e;"
         " text-align: center; color: #ccc; font-size: 12px; }"
@@ -237,7 +238,7 @@ void MainWindow::setupUI()
 
     m_logView = new QTextEdit();
     m_logView->setReadOnly(true);
-    m_logView->setMaximumHeight(120);
+    m_logView->setMaximumHeight(160);
     m_logView->setStyleSheet(
         "QTextEdit { background-color: #1a1a2e; color: #aaa; font-size: 13px; }");
     bottomSplitter->addWidget(m_logView);
@@ -273,13 +274,13 @@ void MainWindow::onStepBind()
         m_btnStop->setText("Stop");
         m_btnStop->setStyleSheet(
             "QPushButton { background-color: #757575; color: white; font-weight: bold;"
-            " padding: 6px 0px; border-radius: 4px; }");
+            " padding: 8px 0px; border-radius: 4px; }");
         m_btnStop->setEnabled(false);
         m_udpReceiver->unbind();
         m_btnStepBind->setText("1. Bind NET");
         m_btnStepBind->setStyleSheet(
             "QPushButton { background-color: #2196F3; color: white; font-weight: bold;"
-            " padding: 6px 16px; border-radius: 4px; }");
+            " padding: 8px 18px; border-radius: 4px; }");
         onStatusUpdate("Unbound.");
     } else {
         QString adcIp = m_editAdcIP->text();
@@ -293,7 +294,7 @@ void MainWindow::onStepBind()
             m_btnStepBind->setText("1. Unbind NET");
             m_btnStepBind->setStyleSheet(
                 "QPushButton { background-color: #f44336; color: white; font-weight: bold;"
-                " padding: 6px 16px; border-radius: 4px; }");
+                " padding: 8px 18px; border-radius: 4px; }");
         }
     }
 }
@@ -319,7 +320,7 @@ void MainWindow::onStop()
         m_btnStop->setText("Run");
         m_btnStop->setStyleSheet(
             "QPushButton { background-color: #4CAF50; color: white; font-weight: bold;"
-            " padding: 6px 0px; border-radius: 4px; }");
+            " padding: 8px 0px; border-radius: 4px; }");
         int total = m_analysis->getFrameCount();
         if (total > 0) {
             m_labelStatus->setText(QString("[Manual] Frame %1 / %2")
@@ -338,7 +339,7 @@ void MainWindow::onStop()
         m_btnStop->setText("Stop");
         m_btnStop->setStyleSheet(
             "QPushButton { background-color: #f44336; color: white; font-weight: bold;"
-            " padding: 6px 0px; border-radius: 4px; }");
+            " padding: 8px 0px; border-radius: 4px; }");
         m_labelStatus->setText(QString("[Auto] Frame %1 / %2")
             .arg(m_analysis->getFrameId()).arg(total));
         onStatusUpdate("Auto-play resumed.");
@@ -361,7 +362,7 @@ void MainWindow::onClear()
         m_btnStop->setText("Stop");
         m_btnStop->setStyleSheet(
             "QPushButton { background-color: #f44336; color: white; font-weight: bold;"
-            " padding: 6px 0px; border-radius: 4px; }");
+            " padding: 8px 0px; border-radius: 4px; }");
         m_btnStop->setEnabled(true);
     }
     m_progressBar->setValue(0);
@@ -469,8 +470,20 @@ void MainWindow::onWaveDataReady()
             .arg(m_analysis->getFrameId()).arg(total));
     }
 
-    m_progressBar->setValue(100);
-    m_progressBar->setFormat(QString("Acquisition Done — %1 frames").arg(total));
+    // 仅新采集数据到达时更新进度条并启动播放
+    if (m_processingNewData) {
+        m_processingNewData = false;
+        m_progressBar->setValue(100);
+        m_progressBar->setFormat(QString("Acquisition Done — %1 frames").arg(total));
+
+        m_isPlaying = true;
+        m_autoPlayTimer->start();
+        m_btnStop->setText("Stop");
+        m_btnStop->setStyleSheet(
+            "QPushButton { background-color: #f44336; color: white; font-weight: bold;"
+            " padding: 8px 0px; border-radius: 4px; }");
+        m_btnStop->setEnabled(true);
+    }
 }
 
 void MainWindow::onStatusUpdate(const QString& msg)
@@ -480,7 +493,7 @@ void MainWindow::onStatusUpdate(const QString& msg)
 
     // 根据状态消息更新进度条
     if (msg.contains("Running DBI pipeline")) {
-        m_progressBar->setValue(70);
+        m_progressBar->setValue(85);
         m_progressBar->setFormat("Stage 2/2 — DBI Pipeline...");
     } else if (msg.contains("Complete")) {
         m_progressBar->setValue(90);

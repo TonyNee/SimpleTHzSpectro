@@ -7,6 +7,7 @@
 #include <QTextEdit>
 #include <QTimer>
 #include <QProgressBar>
+#include <QThread>
 
 #include "Axis/XYView.h"
 #include "udpreceiver.h"
@@ -18,6 +19,9 @@ class MainWindow : public QMainWindow
 public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
+
+signals:
+    void processData(QVector<QByteArray> pcapData);  // 跨线程发送数据到Analysis
 
 private slots:
     void onStepBind();
@@ -42,6 +46,7 @@ private:
     XYView* m_xyView;
     UdpReceiver* m_udpReceiver;
     Analysis* m_analysis;
+    QThread* m_analysisThread;
 
     // 工作流按钮 (编号 1/2/3)
     QPushButton* m_btnStepBind;
@@ -58,6 +63,7 @@ private:
     // 自动播放
     QTimer* m_autoPlayTimer;
     bool m_isPlaying;
+    bool m_processingNewData;  // 标记是否正在处理新采集数据
 
     // UDP配置
     QLineEdit* m_editBindIP;
