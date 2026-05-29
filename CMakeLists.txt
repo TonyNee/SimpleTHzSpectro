@@ -89,9 +89,18 @@ if(WIN32)
     set_target_properties(${PROJECT_NAME} PROPERTIES
         WIN32_EXECUTABLE TRUE
     )
-    # Embed exe icon (MSVC only; MinGW windres has path-with-spaces issues)
+    # Copy icon + rc to build dir so windres finds files relative to build dir
+    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/Config/Icon/app.ico
+                   ${CMAKE_CURRENT_BINARY_DIR}/app.ico COPYONLY)
+    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/app.rc
+                   ${CMAKE_CURRENT_BINARY_DIR}/app_build.rc COPYONLY)
+    target_sources(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/app_build.rc)
+    # MinGW: skip preprocessor to avoid windres path-with-spaces bug
+    if(MINGW)
+        set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/app_build.rc PROPERTIES
+            COMPILE_FLAGS "--no-preprocess")
+    endif()
     if(MSVC)
-        target_sources(${PROJECT_NAME} PRIVATE app.rc)
         target_compile_definitions(${PROJECT_NAME} PRIVATE _CRT_SECURE_NO_WARNINGS _USE_MATH_DEFINES)
     endif()
 endif()
