@@ -1,4 +1,5 @@
 #include <QApplication>
+#include <QIcon>
 #include "mainwindow.h"
 
 int main(int argc, char *argv[])
@@ -20,6 +21,8 @@ int main(int argc, char *argv[])
         QSpinBox { background-color: #3a3a3a; color: #eee; border: 1px solid #555; border-radius: 3px; padding: 3px; }
         QTextEdit { background-color: #1a1a2e; color: #aaa; }
     )");
+
+    QApplication::setWindowIcon(QIcon(":/Config/Icon/app_256.png"));
 
     MainWindow w;
     w.show();
