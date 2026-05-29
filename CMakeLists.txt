@@ -4,6 +4,7 @@ project(SimpleSpectro VERSION 1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
 
 # ===== Qt Detection (Qt6 first, fallback to Qt5) =====
 find_package(Qt6 QUIET COMPONENTS Widgets Network)
