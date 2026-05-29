@@ -84,13 +84,13 @@ endif()
 
 # ===== Platform-specific =====
 if(WIN32)
-    # Windows: set console or GUI subsystem, embed exe icon
+    # Windows: set GUI subsystem
     set_target_properties(${PROJECT_NAME} PROPERTIES
         WIN32_EXECUTABLE TRUE
     )
-    target_sources(${PROJECT_NAME} PRIVATE app.rc)
-    # MSVC: suppress deprecation warnings, define _CRT_SECURE_NO_WARNINGS for fopen
+    # Embed exe icon (MSVC only; MinGW windres has path-with-spaces issues)
     if(MSVC)
+        target_sources(${PROJECT_NAME} PRIVATE app.rc)
         target_compile_definitions(${PROJECT_NAME} PRIVATE _CRT_SECURE_NO_WARNINGS _USE_MATH_DEFINES)
     endif()
 endif()
