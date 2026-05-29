@@ -98,7 +98,7 @@ void MainWindow::setupUI()
     m_editBindIP->setMaximumWidth(110);
     topLayout->addWidget(m_editBindIP);
     topLayout->addWidget(new QLabel("Port:"));
-    m_editBindPort = new QLineEdit("5506");
+    m_editBindPort = new QLineEdit("8080");
     m_editBindPort->setMaximumWidth(60);
     topLayout->addWidget(m_editBindPort);
     topLayout->addWidget(new QLabel("ADC IP:"));

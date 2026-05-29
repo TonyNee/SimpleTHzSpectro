@@ -2,15 +2,13 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <math.h>
-#include "../compat.h"
 #include "dbi.h"
 #include "conv_same.h"
 #include "resample.h"
 #include "carrier.h"
-#include "sync.h"
-#include "ffe.h"
-#include "circshift.h"
+#include <QDebug>
 
+/** @brief 调试打印二维数组的前若干元素 */
 void debug_print(double** data, int chnum, int printnum) {
     for(int i = 0; i < chnum; ++i) {
         for(int j = 0; j < printnum; ++j) {
@@ -37,6 +35,7 @@ double* DBI_process(double** adc_data, int len_out, int len_in, double** w_miso,
     int CAL_LEN = 20000;
     if (len_in <= CAL_LEN)
         CAL_LEN = len_in;
+    else;
 
     // 步骤1: 上采样 —— 每通道插零升采样率
     printf("carrying out upsample ...\n");
@@ -62,94 +61,87 @@ double* DBI_process(double** adc_data, int len_out, int len_in, double** w_miso,
     }
     printf("finished pre_filter\n\n");
 
-    // 步骤4: 载波去除(下变频) —— 减去重建的LO信号
-    printf("carrying out lo_remove ...\n");
-    double* dbi_loc[ch_num];
+    // 步骤4: 载波去除 —— 消除残余LO泄漏 (通道1和2)
+    printf("carrying out lo_removal ...\n");
+    double* dbi_rmlo[ch_num];
+    for (int i = 0; i < ch_num; i++) {
+        dbi_rmlo[i] = dbi_fil1[i];
+    }
+    dbi_rmlo[1] = carrier_removal(dbi_rmlo[1], lo_freq[1 - 1] / 4 / fs_dsp, CAL_LEN);
+    dbi_rmlo[1] = carrier_removal(dbi_rmlo[1], lo_freq[1 - 1] / 2 / fs_dsp, CAL_LEN);
+    dbi_rmlo[2] = carrier_removal(dbi_rmlo[2], lo_freq[2 - 1] / 4 / fs_dsp, CAL_LEN);
+    dbi_rmlo[2] = carrier_removal(dbi_rmlo[2], lo_freq[2 - 1] / 2 / fs_dsp, CAL_LEN);
+    printf("finished lo_removal\n\n");
+
+    // 步骤5: 上变频 —— 将高频通道搬移到对应频段
+    printf("carrying up_conversion ...\n");
+    double* dbi_mix[ch_num - 1];
     for (int i = 0; i < ch_num - 1; i++) {
-        dbi_loc[i] = carrier_removal(dbi_fil1[i + 1], lo_freq[i] / 2 / fs_dsp, CAL_LEN);
+        dbi_mix[i] = (double*)malloc(sizeof(double) * len_dbi);
+        assert(dbi_mix[i] != NULL);
+        for (int t = 0; t < len_dbi; t++) {
+            *(dbi_mix[i] + t) = 2 * *(dbi_rmlo[i + 1] + t) * sin(2 * M_PI * lo_freq[i] / fs_dsp * t + lo_phi[i]);
+        }
     }
-    // 第0通道(低频)基于第1通道的LO相位做载波去除
-    for (int i = 0; i < len_dbi; i++) {
-        *(dbi_fil1[0] + i) = *(dbi_fil1[0] + i) * cos(lo_phi[0]);
-    }
-    dbi_loc[ch_num - 1] = dbi_fil1[ch_num - 1];
-    printf("finished lo_remove\n\n");
+    printf("finished up_conversion\n\n");
 
-    // 步骤5: 混频后滤波 —— 滤除混频产物
-    printf("carrying out aft_filter ...\n");
+    // 步骤6: 混频后滤波 —— 对上变频后的信号进行低通滤波
+    printf("carrying out post_filter ...\n");
     double* dbi_fil2[ch_num];
+    dbi_fil2[0] = dbi_rmlo[0];
+    for (int i = 0; i < ch_num - 1; i++) {
+        dbi_fil2[i + 1] = conv_same(dbi_mix[i], ft_after_mixer[i]);
+    }
+    printf("finished post_filter\n\n");
+
+    // 步骤7: MISO均衡 —— 补偿各通道的频率响应不一致
+    printf("carrying equalize ...\n");
+    double* dbi_eq[ch_num];
     for (int i = 0; i < ch_num; i++) {
-        dbi_fil2[i] = conv_same(dbi_loc[i], ft_after_mixer[0]);
+        dbi_eq[i] = (double*)malloc(sizeof(double) * len_dbi);
+        assert(dbi_eq[i] != NULL);
+        dbi_eq[i] = conv_same(dbi_fil2[i], w_miso[i]);
     }
-    printf("finished aft_filter\n\n");
+    printf("finished equalize\n\n");
 
-    // 步骤6: 上变频 —— 恢复信号到原始频率位置
-    printf("carrying out up-conversion ...\n");
-    double* dbi_upc[ch_num];
-    dbi_upc[0] = dbi_fil2[0];
-    for (int i = ch_num - 1; i > 0; i--) {
-        dbi_upc[i] = (double*)malloc(sizeof(double) * len_dbi);
-        assert(dbi_upc[i] != NULL);
-        for (int j = 0; j < len_dbi; j++) {
-            *(dbi_upc[i] + j) = *(dbi_fil2[i] + j) * cos(-lo_phi[i - 1] + 2 * M_PI * (lo_freq[i - 1] / fs_dsp) * j);
-        }
-    }
-    printf("finished up-conversion\n\n");
-
-    // 步骤7: MISO-FFE均衡 —— LMS自适应多通道均衡
-    printf("carrying out MISO_FFE ...\n");
-    MISO_FFT_STR dbi_ffe = MISO_FFE(dbi_upc, dbi_upc[0], len_equalizer, 0.01, ch_num);
-    printf("finished MISO_FFE\n\n");
-
-    // 步骤8: 通道间同步对齐 —— 补偿通道间延迟差
-    printf("carrying out sync ...\n");
-    SYNC_STR dbi_syn[ch_num];
+    // 步骤8: 时域对齐 —— 按同步延迟偏移各通道数据
+    printf("carrying synchronize ...\n");
+    double* dbi_sync[ch_num];
     for (int i = 0; i < ch_num; i++) {
-        int sync_bias = 1000;
-        if (i == 0) {
-            dbi_syn[i] = sync(dbi_upc[i], dbi_upc[i], sync_bias, 5000, len_dbi - sync_bias - 500);
-        } else {
-            dbi_syn[i] = sync(dbi_upc[i], dbi_upc[0], sync_bias, 5000, len_dbi - sync_bias - 500);
+        dbi_sync[i] = (double*)malloc(sizeof(double) * len_out);
+        assert(dbi_sync[i] != NULL);
+        for (int t = 0; t < len_out; t++) {
+            *(dbi_sync[i] + t) = *(dbi_eq[i] + t + sync_delay[i] + 2000);
         }
     }
-    printf("finished sync\n\n");
+    printf("finished synchronize\n\n");
 
-    // 步骤9: 通道求和 —— 合并所有通道
-    printf("carrying out channel sum ...\n");
-    double* output_data = (double*)malloc(sizeof(double) * len_out);
-    assert(output_data != NULL);
-    for (int i = 0; i < len_out; i++) {
-        *(output_data + i) = 0;
-    }
-    for (int g = 0; g < ch_num; g++) {
-        double* shifted = circshift(dbi_syn[g].data, sync_delay[g]);
-        for (int i = 0; i < len_out; i++) {
-            *(output_data + i) += *(shifted + i + 2500);
+    // 步骤9: 通道叠加 —— 所有通道信号相加得到最终宽带信号
+    printf("carrying add ...\n");
+    double* output = (double*)malloc(sizeof(double) * len_out);
+    assert(output != NULL);
+    for (int t = 0; t < len_out; t++) {
+        *(output + t) = 0;
+        for (int i = 0; i < ch_num; i++) {
+            *(output + t) = *(output + t) + *(dbi_sync[i] + t);
         }
-        free(shifted);
     }
-    printf("finished channel sum\n\n");
+    printf("finished add\n\n");
 
     // 释放临时内存
     for (int i = 0; i < ch_num; i++) {
         free(dbi_usp[i]);
         free(dbi_fil1[i]);
+        free(dbi_eq[i]);
+        free(dbi_sync[i]);
     }
-    for (int i = 0; i < ch_num - 1; i++) {
-        free(dbi_loc[i]);
+    for (int i = 1; i < ch_num; i++) {
+        free(dbi_rmlo[i]);
         free(dbi_fil2[i]);
     }
-    free(dbi_upc[ch_num - 1]);
-    for (int i = 0; i < ch_num; i++) {
-        free(dbi_syn[i].data);
+    for (int i = 0; i < ch_num - 1; i++) {
+        free(dbi_mix[i]);
     }
-    free(dbi_ffe.out);
-    for (int g = 0; g < ch_num; g++) {
-        free(dbi_ffe.w[g]);
-    }
-    free(dbi_ffe.w);
-    free(dbi_ffe.e);
-    free(dbi_ffe.z);
 
-    return output_data;
+    return output;
 }

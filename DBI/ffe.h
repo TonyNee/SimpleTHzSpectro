@@ -47,4 +47,4 @@ FFT_STR FFE(double* in, double* train, int TAP_LENGTH, int SYMBOL_WIDTH, double 
  * @param u          LMS步长因子
  * @return           均衡结果(含多通道输出/系数/误差)
  */
-MISO_FFT_STR MISO_FFE(double** in, double* train, int TAP_LENGTH, double u, int group_num);
+MISO_FFT_STR MISO_FFE(double** in, double* train, int TAP_LENGTH, double u);
