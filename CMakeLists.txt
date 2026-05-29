@@ -89,11 +89,13 @@ if(WIN32)
     set_target_properties(${PROJECT_NAME} PROPERTIES
         WIN32_EXECUTABLE TRUE
     )
-    # Copy icon + rc to build dir so windres finds files relative to build dir
+    # Copy icon + rc + manifest to build dir
     configure_file(${CMAKE_CURRENT_SOURCE_DIR}/Config/Icon/app.ico
                    ${CMAKE_CURRENT_BINARY_DIR}/app.ico COPYONLY)
     configure_file(${CMAKE_CURRENT_SOURCE_DIR}/app.rc
                    ${CMAKE_CURRENT_BINARY_DIR}/app_build.rc COPYONLY)
+    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/SimpleSpectro.VisualElementsManifest.xml
+                   ${CMAKE_CURRENT_BINARY_DIR}/SimpleSpectro.VisualElementsManifest.xml COPYONLY)
     target_sources(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/app_build.rc)
     if(MSVC)
         target_compile_definitions(${PROJECT_NAME} PRIVATE _CRT_SECURE_NO_WARNINGS _USE_MATH_DEFINES)
