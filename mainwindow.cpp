@@ -10,6 +10,7 @@
 #include <QStandardPaths>
 #include <QApplication>
 #include <QSplitter>
+#include <algorithm>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), m_isPlaying(false)
@@ -34,8 +35,16 @@ MainWindow::MainWindow(QWidget *parent)
 
     // UDP data -> Analysis -> XYView
     connect(m_udpReceiver, &UdpReceiver::dataReady, this, [this]() {
+        m_progressBar->setValue(50);
+        m_progressBar->setFormat("Stage 2/2 — DBI Processing...");
+        QApplication::processEvents();
+
         m_analysis->processPcapData(m_udpReceiver->getPcapData());
         m_udpReceiver->clearBuffer();
+
+        m_progressBar->setValue(90);
+        m_progressBar->setFormat("Stage 2/2 — Segmentation...");
+
         // 新数据到达，启动自动播放
         m_isPlaying = true;
         m_autoPlayTimer->start();
@@ -54,6 +63,8 @@ MainWindow::MainWindow(QWidget *parent)
 
     // 加载无数据基线并自动开始播放
     m_analysis->loadOscData("Config/nodata.csv");
+    m_progressBar->setValue(0);
+    m_progressBar->setFormat("Baseline");
     if (m_analysis->getFrameCount() > 1) {
         m_isPlaying = true;
         m_autoPlayTimer->start();
@@ -204,6 +215,19 @@ void MainWindow::setupUI()
     // ===== Central display =====
     mainLayout->addWidget(m_xyView, 1);
 
+    // ===== Pipeline progress =====
+    m_progressBar = new QProgressBar();
+    m_progressBar->setRange(0, 100);
+    m_progressBar->setValue(0);
+    m_progressBar->setFormat("Ready");
+    m_progressBar->setMaximumHeight(20);
+    m_progressBar->setStyleSheet(
+        "QProgressBar { border: 1px solid #444; border-radius: 3px; background: #1a1a2e;"
+        " text-align: center; color: #ccc; font-size: 12px; }"
+        "QProgressBar::chunk { background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+        " stop:0 #2196F3, stop:0.3 #2196F3, stop:0.3 #FF9800, stop:0.7 #FF9800, stop:0.7 #4CAF50); }");
+    mainLayout->addWidget(m_progressBar);
+
     // ===== Bottom status =====
     QSplitter* bottomSplitter = new QSplitter(Qt::Horizontal);
 
@@ -280,6 +304,8 @@ void MainWindow::onTriggerAdc()
         onStatusUpdate("Error: Not bound. Click 1.Bind first.");
         return;
     }
+    m_progressBar->setValue(0);
+    m_progressBar->setFormat("Waiting for data...");
     int sampleTimeUs = m_spinSampleTime->value();
     m_udpReceiver->sendADCMessage(sampleTimeUs * 1000);  // µs -> ns
 }
@@ -338,12 +364,17 @@ void MainWindow::onClear()
             " padding: 6px 0px; border-radius: 4px; }");
         m_btnStop->setEnabled(true);
     }
+    m_progressBar->setValue(0);
+    m_progressBar->setFormat("Baseline");
     m_labelStatus->setText("Baseline restored.");
 }
 
 void MainWindow::onPacketReceived(int count)
 {
-    m_labelStatus->setText(QString("Receiving... %1 packets").arg(count));
+    m_labelStatus->setText(QString("Sampling... %1 packets").arg(count));
+    int pct = std::min(5 + count / 2, 45);  // 5-45% during sampling
+    m_progressBar->setValue(pct);
+    m_progressBar->setFormat(QString("Stage 1/2 — Sampling (%1 pkts)").arg(count));
 }
 
 void MainWindow::onSaveCsv()
@@ -437,12 +468,24 @@ void MainWindow::onWaveDataReady()
             .arg(m_isPlaying ? "[Auto] " : "")
             .arg(m_analysis->getFrameId()).arg(total));
     }
+
+    m_progressBar->setValue(100);
+    m_progressBar->setFormat(QString("Acquisition Done — %1 frames").arg(total));
 }
 
 void MainWindow::onStatusUpdate(const QString& msg)
 {
     m_labelStatus->setText(msg);
     m_logView->append(QDateTime::currentDateTime().toString("hh:mm:ss") + " " + msg);
+
+    // 根据状态消息更新进度条
+    if (msg.contains("Running DBI pipeline")) {
+        m_progressBar->setValue(70);
+        m_progressBar->setFormat("Stage 2/2 — DBI Pipeline...");
+    } else if (msg.contains("Complete")) {
+        m_progressBar->setValue(90);
+        m_progressBar->setFormat("Stage 2/2 — Segmentation...");
+    }
 }
 
 void MainWindow::onChooseCalibDir()

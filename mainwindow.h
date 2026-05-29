@@ -6,6 +6,7 @@
 #include <QSpinBox>
 #include <QTextEdit>
 #include <QTimer>
+#include <QProgressBar>
 
 #include "Axis/XYView.h"
 #include "udpreceiver.h"
@@ -72,6 +73,7 @@ private:
     QLineEdit* m_editFilterDir;
 
     // 状态显示
+    QProgressBar* m_progressBar;
     QLabel* m_labelFrameInfo;
     QLabel* m_labelStatus;
     QTextEdit* m_logView;
