@@ -46,6 +46,7 @@ set(SOURCES
 
 set(HEADERS
     compat.h
+    datahub.h
     mainwindow.h
     udpreceiver.h
     analysis.h

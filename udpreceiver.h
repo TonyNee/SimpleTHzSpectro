@@ -1,14 +1,22 @@
 #pragma once
 #include <QObject>
+#include <QThread>
 #include <QUdpSocket>
-#include <QVector>
-#include <QByteArray>
+#include <QHostAddress>
 
 /**
- * @brief UDP数据接收器 —— 替代原项目的PcapRecv
+ * @brief UDP数据接收器（独立线程）—— 替代原项目 PcapRecv + UDP 控制通道
  *
- * 使用QUdpSocket直接接收ADC发送的UDP数据包（1005字节/包），
- * 累积到缓冲区中，检测到"eofeofeof"标记时触发数据分析。
+ * 运行在独立 QThread 中，负责：
+ * 1. 绑定指定IP:端口监听ADC数据包
+ * 2. 向ADC发送采样触发命令（"mv424"协议）
+ * 3. 接收所有UDP包写入 SimpleDataHub::pcapData
+ * 4. 检测EOF包（23字节含"eofeofeof"）→ 触发 dataReady
+ *
+ * 与原项目对应关系：
+ *   原 UDP::sendADCMessage  →  UdpReceiver::sendADCMessage
+ *   原 PcapRecv::packetHandler → UdpReceiver::readPendingDatagrams
+ *   原 ThreadManager::pcapData → SimpleDataHub::pcapData
  */
 class UdpReceiver : public QObject
 {
@@ -17,30 +25,36 @@ public:
     explicit UdpReceiver(QObject *parent = nullptr);
     ~UdpReceiver();
 
-    bool bind(const QString& address, quint16 port);
-    void unbind();
+    // 线程控制
+    void startWorker(const QString& bindIP, quint16 bindPort,
+                     const QString& adcIP, quint16 adcPort);
+    void stopWorker();
+
     bool isBound() const;
 
-    // 发送ADC采样触发命令
-    void setAdcTarget(const QString& ip, quint16 port);
+    // 发送ADC采样触发命令（可在任意线程调用，信号槽跨线程）
     void sendADCMessage(int sampleTimeNs);
 
-    QVector<QByteArray>& getPcapData();
-    void clearBuffer();
-
 signals:
-    void dataReady();       // EOF标记检测到，触发分析
-    void statusUpdate(const QString& msg);  // 状态消息
-    void packetReceived(int count);         // 已接收包数量
+    void statusUpdate(const QString& msg);
+    void packetCountChanged(int count);
 
-public slots:
+    // 内部信号：在线程内触发发送
+    void doSendADCMessage(int sampleTimeNs);
+
+private slots:
     void readPendingDatagrams();
+    void onSendADCMessage(int sampleTimeNs);
 
 private:
+    void initSocket();
+
+    QThread* m_workerThread;
     QUdpSocket* mUdpSocket;
-    QVector<QByteArray> mPcapData;
     bool mBound;
 
+    QString mBindIP;
+    quint16 mBindPort;
     QHostAddress mAdcAddr;
     quint16 mAdcPort;
 };

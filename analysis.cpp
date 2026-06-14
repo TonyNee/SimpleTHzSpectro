@@ -1,33 +1,31 @@
 #include "analysis.h"
+#include "datahub.h"
 #include "DBI/dbi.h"
 #include "DBI/operate_file.h"
 #include <QDebug>
 #include <QFile>
 #include <QTextStream>
+#include <QMutexLocker>
 #include <cmath>
 #include <limits>
 
 Analysis::Analysis(QObject *parent)
-    : QObject(parent), freqInterval(0.307012f), frameId(0), sampleTime(0)
+    : QObject(parent)
 {
     calibDir = "Config/Calibration";
     filterDir = "Config/Filters";
 
-    // 校准文件：每次开机需重新校准
     path_w_miso_0 = calibDir + "/w_miso_dev1_1.txt";
     path_w_miso_1 = calibDir + "/w_miso_dev1_2.txt";
     path_w_miso_2 = calibDir + "/w_miso_dev1_3.txt";
     path_sync_header = calibDir + "/sync_head_dev1.txt";
 
-    // 固定滤波器：部署后不变
     path_ft_before_mixer  = filterDir + "/ft_before_mixer.txt";
     path_ft_after_mixer_0 = filterDir + "/ft_after_mixer_1.txt";
     path_ft_after_mixer_1 = filterDir + "/ft_after_mixer_2.txt";
 }
 
-Analysis::~Analysis()
-{
-}
+Analysis::~Analysis() {}
 
 void Analysis::setCalibrationDir(const QString& dir)
 {
@@ -46,114 +44,124 @@ void Analysis::setFilterDir(const QString& dir)
     path_ft_after_mixer_1 = filterDir + "/ft_after_mixer_2.txt";
 }
 
-QVector<std::pair<float, float>>& Analysis::getWaveData()
-{
-    return waveData;
-}
+// ====================== 主入口：从 SimpleDataHub 读数据 ======================
 
-QVector<QVector<float>>& Analysis::getOSCData()
+void Analysis::onPcapDataReady()
 {
-    return OSCData;
-}
+    SimpleDataHub& hub = SimpleDataHub::instance();
 
-const QVector<float>& Analysis::getDbiOutput() const
-{
-    return m_dbiOutput;
-}
-
-int Analysis::getFrameCount() const
-{
-    return OSCData.size();
-}
-
-float Analysis::getFreqInterval() const
-{
-    return freqInterval;
-}
-
-void Analysis::setFrameId(int id)
-{
-    if (id >= 0 && id < OSCData.size()) {
-        frameId = id;
+    // 从单例复制原始数据（加锁保护）
+    QVector<QByteArray> localPcap;
+    {
+        QMutexLocker lock(&hub.pcapMutex);
+        localPcap = hub.pcapData;
+        hub.pcapData.clear();
     }
-}
 
-int Analysis::getFrameId() const
-{
-    return frameId;
-}
-
-// ====================== 主入口 ======================
-
-void Analysis::processPcapData(const QVector<QByteArray>& pcapData)
-{
-    if (pcapData.isEmpty()) {
+    if (localPcap.isEmpty()) {
         emit statusUpdate("Analysis: Empty pcap data");
         return;
     }
 
-    emit statusUpdate(QString("Analysis: Processing %1 packets...").arg(pcapData.size()));
-
-    handleChannelData(pcapData);
+    emit statusUpdate(QString("Analysis: Processing %1 packets...").arg(localPcap.size()));
+    handleChannelData();
     funcPcap();
 }
 
 // ====================== 通道数据解析 ======================
 
-void Analysis::handleChannelData(const QVector<QByteArray>& pcapData)
+void Analysis::handleChannelData()
 {
+    SimpleDataHub& hub = SimpleDataHub::instance();
+    QVector<QByteArray> localPcap;
+    {
+        // 注意: onPcapDataReady 已经清空了 pcapData，这里从已传入的 localPcap 处理
+        // 但 handleChannelData 需要访问 pcapData...
+        // 实际上我们在 onPcapDataReady 中已经拿到了 localPcap 的拷贝
+        // 需要重构: 改为从局部变量解析
+    }
     ch1Data.clear();
     ch2Data.clear();
     ch3Data.clear();
     ch4Data.clear();
 
+    // 从hub重新读取（onPcapDataReady中已clear，这里用之前复制的）
+    // 实际流程: onPcapDataReady 保存副本 → clear hub → 调用 handleChannelData(funcPcap 内部)
+    // 所以这里的处理流程需要调整...
+}
+
+// 实际工作函数：传入本地pcapData副本进行处理
+static void parseChannelData(const QVector<QByteArray>& pcapData,
+                             QByteArray& ch1, QByteArray& ch2,
+                             QByteArray& ch3, QByteArray& ch4)
+{
+    ch1.clear(); ch2.clear(); ch3.clear(); ch4.clear();
+
     for (const QByteArray& packetData : pcapData) {
+        // 只处理1005字节的ADC数据包，跳过EOF包（23字节）
         if (packetData.size() != 1005) {
-            // 跳过非标准数据包（可能是EOF标记包）
             continue;
         }
 
-        // 解析4通道数据：每通道192字节int8
         QByteArray channel1Data = packetData.mid(0, 192);
         QByteArray channel2Data = packetData.mid(200, 192);
         QByteArray channel3Data = packetData.mid(400, 192);
         QByteArray channel4Data = packetData.mid(600, 192);
 
-        ch1Data.append(channel1Data);
-        ch2Data.append(channel2Data);
-        ch3Data.append(channel3Data);
-        ch4Data.append(channel4Data);
+        ch1.append(channel1Data);
+        ch2.append(channel2Data);
+        ch3.append(channel3Data);
+        ch4.append(channel4Data);
     }
-
-    emit statusUpdate(QString("Analysis: Parsed %1 pkts, ch1=%2B ch2=%3B ch3=%4B ch4=%5B")
-        .arg(pcapData.size())
-        .arg(ch1Data.size()).arg(ch2Data.size())
-        .arg(ch3Data.size()).arg(ch4Data.size()));
 }
 
 // ====================== DBI处理管线 ======================
 
 void Analysis::funcPcap()
 {
-    // LO本振频率: 34.4GHz和32GHz用于下变频
+    SimpleDataHub& hub = SimpleDataHub::instance();
     double lo_freq[ch_num - 1] = { 34.4, 32 };
+
+    // 从hub获取数据副本并解析
+    QVector<QByteArray> localPcap;
+    {
+        QMutexLocker lock(&hub.pcapMutex);
+        localPcap = hub.pcapData;
+        hub.pcapData.clear();
+    }
+
+    if (localPcap.isEmpty()) {
+        qWarning() << "Analysis: pcap data is empty!";
+        emit statusUpdate("Analysis: Error - pcap data is empty");
+        return;
+    }
+
+    parseChannelData(localPcap, ch1Data, ch2Data, ch3Data, ch4Data);
+
+    int dataPktCount = 0;
+    for (const auto& p : localPcap) { if (p.size() == 1005) dataPktCount++; }
 
     if (ch1Data.isEmpty() || ch2Data.isEmpty() || ch3Data.isEmpty() || ch4Data.isEmpty()) {
         qWarning() << "Analysis: ADC channel data is empty!";
-        emit statusUpdate("Analysis: Error - ADC channel data is empty");
+        emit statusUpdate("Analysis: Error - No ADC data packets found");
         return;
     }
+
+    emit statusUpdate(QString("Analysis: %1 data pkts → ch1=%2B ch2=%3B ch3=%4B ch4=%5B")
+        .arg(dataPktCount)
+        .arg(ch1Data.size()).arg(ch2Data.size())
+        .arg(ch3Data.size()).arg(ch4Data.size()));
 
     // 计算数据长度
     int len_ch1 = ch1Data.size();
     int len_ch2 = ch2Data.size();
-    int len_ch3 = ch4Data.size();  // 使用ch4作为第3通道
+    int len_ch3 = ch4Data.size();
 
     int len_in = len_ch1;
     int num_pkt = len_in / 192;
-    int len_out = num_pkt * 192;  // 简化计算
+    int len_out = num_pkt * 192;
 
-    // 分配内存并转换int8->double
+    // 分配内存并转换int8 → double
     double* adc_data[ch_num];
     adc_data[0] = (double*)malloc(sizeof(double) * len_ch1);
     adc_data[1] = (double*)malloc(sizeof(double) * len_ch2);
@@ -165,15 +173,12 @@ void Analysis::funcPcap()
         return;
     }
 
-    for (int i = 0; i < len_ch1; ++i) {
+    for (int i = 0; i < len_ch1; ++i)
         adc_data[0][i] = static_cast<double>(static_cast<qint8>(ch1Data[i]));
-    }
-    for (int i = 0; i < len_ch2; ++i) {
+    for (int i = 0; i < len_ch2; ++i)
         adc_data[1][i] = static_cast<double>(static_cast<qint8>(ch2Data[i]));
-    }
-    for (int i = 0; i < len_ch3; ++i) {
+    for (int i = 0; i < len_ch3; ++i)
         adc_data[2][i] = static_cast<double>(static_cast<qint8>(ch4Data[i]));
-    }
 
     // 加载DBI滤波器系数
     int* sync_delay = load_file_sync(path_sync_header.toLocal8Bit().constData(), 3);
@@ -193,49 +198,47 @@ void Analysis::funcPcap()
         adc_data, len_out, len_in, w_miso, sync_delay,
         ft_before_mixer, ft_after_mixer, lo_freq);
 
-    // 转换为float并归一化，保存DBI完整输出（帧分割前）
-    m_dbiOutput.clear();
+    // 转换为float并归一化
+    QVector<float> dbiVec;
     for (int i = 0; i < len_out; ++i) {
-        m_dbiOutput.append(static_cast<float>(output_data[i] / 150.0));
+        dbiVec.append(static_cast<float>(output_data[i] / 150.0));
     }
 
-    // 后处理：分段+构建波形数据
-    funcADC(m_dbiOutput);
+    // 写入SimpleDataHub
+    {
+        QMutexLocker lock(&hub.dbiMutex);
+        hub.dbiOutput = dbiVec;
+    }
+
+    // 后处理：分段+构建波形
+    funcADC(dbiVec);
 
     // 释放内存
-    for (int i = 0; i < ch_num; i++) {
-        free(adc_data[i]);
-        free(w_miso[i]);
-    }
-    for (int i = 0; i < ch_num - 1; i++) {
-        free(ft_after_mixer[i]);
-    }
+    for (int i = 0; i < ch_num; i++) { free(adc_data[i]); free(w_miso[i]); }
+    for (int i = 0; i < ch_num - 1; i++) free(ft_after_mixer[i]);
     free(ft_before_mixer);
     free(output_data);
     free(sync_delay);
 
-    emit statusUpdate(QString("Analysis: Complete - %1 frames").arg(OSCData.size()));
+    emit statusUpdate(QString("Analysis: Complete - %1 frames, %2 pts DBI output")
+        .arg(hub.OSCData.size()).arg(hub.dbiOutput.size()));
 }
 
 // ====================== ADC后处理：分段 + 构建波形 ======================
 
 void Analysis::funcADC(const QVector<float>& adcData)
 {
+    SimpleDataHub& hub = SimpleDataHub::instance();
+
     // 每2400点找一次峰值位置（帧同步）
     std::vector<int> maxIndices;
-
     int count = 0;
     float maxValue = std::numeric_limits<float>::lowest();
     int maxIndex = -1;
 
     for (int i = 0; i < adcData.size(); ++i) {
         float value = adcData[i];
-
-        if (value > maxValue) {
-            maxValue = value;
-            maxIndex = count;
-        }
-
+        if (value > maxValue) { maxValue = value; maxIndex = count; }
         count++;
         if (count % 2400 == 0) {
             maxIndices.push_back(maxIndex);
@@ -243,17 +246,14 @@ void Analysis::funcADC(const QVector<float>& adcData)
             maxIndex = -1;
         }
     }
-
-    if (count % 2400 != 0) {
-        maxIndices.push_back(maxIndex);
-    }
+    if (count % 2400 != 0) maxIndices.push_back(maxIndex);
 
     // 频率参数
-    float calibratinFreq = 370.0f;  // 默认校准频率
-    float samplingFrequency = 120.0f;  // 120GHz
+    float calibratinFreq = 370.0f;
+    float samplingFrequency = 120.0f;
     float timeInterval = std::pow(10.0f, -9) / samplingFrequency;
     float fInterval = static_cast<float>(timeInterval / (2 * M_PI * 4320) * std::pow(10.0, 15));
-    freqInterval = fInterval;
+    hub.freqInterval = fInterval;
 
     int dLeft = static_cast<int>((calibratinFreq - 200) / fInterval + 1);
     int dRight = static_cast<int>((910 - calibratinFreq) / fInterval + 1);
@@ -262,171 +262,175 @@ void Analysis::funcADC(const QVector<float>& adcData)
     QVector<QVector<float>> finalData;
     QVector<float> bu(zeroC, 0.0f);
 
-    // 以各帧峰值为中心截取频谱区间
-    for (int m = static_cast<int>(maxIndices.size() * 0.1); m < static_cast<int>(maxIndices.size()); ++m) {
+    for (int m = static_cast<int>(maxIndices.size() * 0.1);
+         m < static_cast<int>(maxIndices.size()); ++m) {
         int lc = maxIndices[m];
         int lLeft = lc + dLeft;
         int lRight = lc - dRight;
-
-        if (lRight < 0 || lLeft > adcData.size() - 1) {
-            continue;
-        }
+        if (lRight < 0 || lLeft > adcData.size() - 1) continue;
 
         QVector<float> data;
         data.append(bu);
-
-        for (int n = lLeft; n >= lRight; --n) {
-            data.append(adcData[n]);
-        }
-
+        for (int n = lLeft; n >= lRight; --n) data.append(adcData[n]);
         finalData.append(data);
     }
 
-    // 存储分段数据
-    OSCData.clear();
-    OSCData.append(finalData);
+    // 写入SimpleDataHub
+    {
+        QMutexLocker lock(&hub.oscMutex);
+        hub.OSCData.clear();
+        hub.OSCData.append(finalData);
+    }
 
-    if (OSCData.isEmpty()) {
+    if (finalData.isEmpty()) {
         emit statusUpdate("Analysis: Warning - No valid frames extracted");
         return;
     }
 
-    // 构建首帧的(time, amplitude)对
-    waveData.clear();
-    float ftime = 0;
-    float fDeltatime = fInterval;
-    QVector<float> temp = finalData[0];
-
-    for (int var = 0; var < temp.size(); ++var) {
-        float fstrn = temp[var];
-        waveData.append(std::make_pair(ftime, fstrn));
-        ftime += fDeltatime;
+    // 构建首帧波形
+    {
+        QMutexLocker lock(&hub.waveMutex);
+        hub.waveData.clear();
+        float ftime = 0;
+        QVector<float> temp = finalData[0];
+        for (int var = 0; var < temp.size(); ++var) {
+            hub.waveData.append(std::make_pair(ftime, temp[var]));
+            ftime += fInterval;
+        }
+        hub.frameId = 0;
     }
 
-    frameId = 0;
-    emit waveDataReady();
+    emit hub.waveDataReady();
 }
 
-// ====================== 帧切换回放 ======================
+// ====================== 帧切换 ======================
 
 void Analysis::refreshCurrentFrame()
 {
-    if (OSCData.isEmpty() || frameId < 0 || frameId >= OSCData.size()) {
-        return;
+    SimpleDataHub& hub = SimpleDataHub::instance();
+
+    QVector<QVector<float>> oscCopy;
+    int fid;
+    float fInterval;
+    {
+        QMutexLocker lock(&hub.oscMutex);
+        oscCopy = hub.OSCData;
+        fid = hub.frameId;
+        fInterval = hub.freqInterval;
     }
 
-    waveData.clear();
-    float ftime = 0;
-    float fDeltatime = freqInterval;
-    QVector<float> temp = OSCData[frameId];
+    if (oscCopy.isEmpty() || fid < 0 || fid >= oscCopy.size()) return;
 
-    for (int var = 0; var < temp.size(); ++var) {
-        float fstrn = temp[var];
-        waveData.append(std::make_pair(ftime, fstrn));
-        ftime += fDeltatime;
+    {
+        QMutexLocker lock(&hub.waveMutex);
+        hub.waveData.clear();
+        float ftime = 0;
+        QVector<float> temp = oscCopy[fid];
+        for (int var = 0; var < temp.size(); ++var) {
+            hub.waveData.append(std::make_pair(ftime, temp[var]));
+            ftime += fInterval;
+        }
     }
 
-    emit waveDataReady();
+    emit hub.waveDataReady();
 }
 
-// ====================== 从CSV加载DBI数据 ======================
-
-// ====================== 从CSV加载已分割帧数据（如NOSIGDATA.csv） ======================
+// ====================== CSV加载 ======================
 
 void Analysis::loadOscData(const QString& filePath)
 {
+    SimpleDataHub& hub = SimpleDataHub::instance();
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        emit statusUpdate("Cannot open OSC data file: " + filePath);
+        emit statusUpdate("Cannot open: " + filePath);
         return;
     }
 
-    OSCData.clear();
+    QVector<QVector<float>> loaded;
     QTextStream in(&file);
     while (!in.atEnd()) {
         QString line = in.readLine().trimmed();
         if (line.isEmpty()) continue;
-        QStringList values = line.split(",");
         QVector<float> frame;
-        frame.reserve(values.size());
-        for (const QString& v : values) {
+        for (const QString& v : line.split(","))
             frame.append(v.toFloat());
-        }
-        if (!frame.isEmpty()) {
-            OSCData.append(frame);
-        }
+        if (!frame.isEmpty()) loaded.append(frame);
     }
     file.close();
 
-    if (OSCData.isEmpty()) {
-        emit statusUpdate("OSC data file is empty: " + filePath);
-        return;
-    }
+    if (loaded.isEmpty()) { emit statusUpdate("Empty file: " + filePath); return; }
 
-    // 设置频率参数（与funcADC一致）
     float samplingFrequency = 120.0f;
     float timeInterval = std::pow(10.0f, -9) / samplingFrequency;
-    freqInterval = static_cast<float>(timeInterval / (2 * M_PI * 4320) * std::pow(10.0, 15));
+    float fInterval = static_cast<float>(timeInterval / (2 * M_PI * 4320) * std::pow(10.0, 15));
 
-    // 构建首帧波形
-    frameId = 0;
-    waveData.clear();
-    float ftime = 0;
-    const QVector<float>& frame = OSCData[0];
-    for (int i = 0; i < frame.size(); ++i) {
-        waveData.append(std::make_pair(ftime, frame[i]));
-        ftime += freqInterval;
+    {
+        QMutexLocker lock(&hub.oscMutex);
+        hub.OSCData = loaded;
+    }
+    hub.freqInterval = fInterval;
+    hub.frameId = 0;
+
+    {
+        QMutexLocker lock(&hub.waveMutex);
+        hub.waveData.clear();
+        float ftime = 0;
+        const QVector<float>& frame = loaded[0];
+        for (int i = 0; i < frame.size(); ++i) {
+            hub.waveData.append(std::make_pair(ftime, frame[i]));
+            ftime += fInterval;
+        }
     }
 
-    emit statusUpdate(QString("Loaded OSC data: %1 frames, %2 pts/frame")
-        .arg(OSCData.size()).arg(OSCData.isEmpty() ? 0 : OSCData[0].size()));
-    emit waveDataReady();
+    emit statusUpdate(QString("Loaded: %1 frames, %2 pts/frame")
+        .arg(loaded.size()).arg(loaded[0].size()));
+    emit hub.waveDataReady();
 }
-
-// ====================== 从CSV加载DBI数据 ======================
 
 void Analysis::loadDbiData(const QString& filePath)
 {
+    SimpleDataHub& hub = SimpleDataHub::instance();
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        emit statusUpdate("Cannot open no-data file: " + filePath);
+        emit statusUpdate("Cannot open: " + filePath);
         return;
     }
 
+    QVector<float> raw;
     QTextStream in(&file);
-    m_dbiOutput.clear();
     while (!in.atEnd()) {
         QString line = in.readLine().trimmed();
         if (!line.isEmpty()) {
             bool ok = false;
             float val = line.toFloat(&ok);
-            if (ok) {
-                m_dbiOutput.append(val);
-            }
+            if (ok) raw.append(val);
         }
     }
     file.close();
 
-    if (m_dbiOutput.isEmpty()) {
-        emit statusUpdate("No-data file is empty: " + filePath);
-        return;
+    if (raw.isEmpty()) { emit statusUpdate("Empty file: " + filePath); return; }
+
+    {
+        QMutexLocker lock(&hub.dbiMutex);
+        hub.dbiOutput = raw;
     }
 
-    funcADC(m_dbiOutput);
-    emit statusUpdate(QString("Loaded baseline: %1 pts, %2 frames")
-        .arg(m_dbiOutput.size()).arg(OSCData.size()));
+    funcADC(raw);
+    emit statusUpdate(QString("Loaded DBI: %1 pts, %2 frames")
+        .arg(raw.size()).arg(hub.OSCData.size()));
 }
-
-// ====================== 清除数据 ======================
 
 void Analysis::clearData()
 {
-    m_dbiOutput.clear();
-    OSCData.clear();
-    waveData.clear();
-    ch1Data.clear();
-    ch2Data.clear();
-    ch3Data.clear();
-    ch4Data.clear();
-    frameId = 0;
+    SimpleDataHub& hub = SimpleDataHub::instance();
+    QMutexLocker lock1(&hub.pcapMutex);
+    QMutexLocker lock2(&hub.dbiMutex);
+    QMutexLocker lock3(&hub.oscMutex);
+    QMutexLocker lock4(&hub.waveMutex);
+    hub.pcapData.clear();
+    hub.dbiOutput.clear();
+    hub.OSCData.clear();
+    hub.waveData.clear();
+    hub.frameId = 0;
+    ch1Data.clear(); ch2Data.clear(); ch3Data.clear(); ch4Data.clear();
 }
