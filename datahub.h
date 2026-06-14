@@ -25,7 +25,8 @@ public:
     QVector<QByteArray> pcapData;
 
     // ---- DBI输出（帧分割前完整数据） ----
-    QVector<float> dbiOutput;
+    QVector<float> dbiOutput;       // 归一化后的float数据（/150），用于波形显示
+    QVector<double> dbiRawOutput;   // 原始double数据（=源程序 output_data），用于文件保存
 
     // ---- 分段帧数据 ----
     QVector<QVector<float>> OSCData;

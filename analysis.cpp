@@ -6,8 +6,10 @@
 #include <QFile>
 #include <QTextStream>
 #include <QDir>
+#include <QDateTime>
 #include <cmath>
 #include <limits>
+#include "compat.h"
 
 // 前置声明
 static void parseChannelData(const QVector<QByteArray>& pcapData,
@@ -125,10 +127,10 @@ void Analysis::funcPcap()
     int len_ch2 = ch2Data.size();
     int len_ch3 = ch4Data.size();
 
-    // len_in 基于实际收到的数据，避免理论与实际不一致导致DBI越界崩溃
-    int len_in = len_ch1;
-    int len_out_theoretical = hub.sampleTimeNs * 120;
-    int len_out = len_out_theoretical;
+    // 严格按源程序: len_out = sample_time(ns) * 120 GSa/s
+    int len_out = hub.sampleTimeNs * 120;
+    int num_pkt = static_cast<int>(ceil((len_out + len_cut) / 192.0 / 16 / ch_num));
+    int len_in = num_pkt * 192 * 16;  // each channel input length from ADC
 
     // 分配内存并转换int8 → double
     double* adc_data[ch_num];
@@ -169,7 +171,14 @@ void Analysis::funcPcap()
 
     emit statusUpdate(QString("DBI output length: %1 pts").arg(len_out));
 
-    // 转换为float并归一化
+    // 保存原始double数据到hub（参考源程序 write_file）
+    int raw_len = static_cast<int>(malloc_usable_size(output_data) / sizeof(double));
+    hub.dbiRawOutput.clear();
+    for (int i = 0; i < raw_len; ++i) {
+        hub.dbiRawOutput.append(output_data[i]);
+    }
+
+    // 转换为float并归一化（用于波形显示）
     QVector<float> dbiVec;
     for (int i = 0; i < len_out; ++i) {
         dbiVec.append(static_cast<float>(output_data[i] / 150.0));
@@ -181,11 +190,24 @@ void Analysis::funcPcap()
     // 后处理：分段+构建波形
     funcADC(dbiVec);
 
-    // 自动保存ADC原始数据到 Output/ 目录（参考源程序 writeAdcDataToCSV）
+    // 自动保存DBI输出到 Output/ 目录（参考源程序 write_file(path_output_data, output_data)）
     QDir outputDir("Output");
     if (!outputDir.exists()) {
         outputDir.mkpath(".");
     }
+    QString dbiPath = "Output/dbi_output_" +
+                      QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss") + "_ch1.txt";
+    QFile dbiFile(dbiPath);
+    if (dbiFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QTextStream out(&dbiFile);
+        for (int i = 0; i < raw_len; ++i) {
+            out << QString::number(output_data[i], 'f', 6) << "\n";
+        }
+        dbiFile.close();
+        emit statusUpdate(QString("DBI output saved to %1").arg(dbiPath));
+    }
+
+    // 自动保存ADC原始数据（Output目录已由DBI保存创建）
     QFile adcFile("Output/adc_data_ch1.csv");
     if (adcFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
         QTextStream out(&adcFile);

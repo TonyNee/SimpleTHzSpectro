@@ -361,17 +361,17 @@ void MainWindow::onSaveCsv()
 {
     SimpleDataHub& hub = SimpleDataHub::instance();
 
-    // 保存DBI输出数据（参考源程序 write_file(path_output_data, output_data)）
-    QVector<float> dbiCopy = hub.dbiOutput;
+    // 保存DBI原始输出（参考源程序 write_file(path_output_data, output_data)，%lf格式）
+    QVector<double> dbiRaw = hub.dbiRawOutput;
 
-    if (dbiCopy.isEmpty()) {
+    if (dbiRaw.isEmpty()) {
         onStatusUpdate("No DBI data to save. Trigger ADC first.");
         return;
     }
 
     QString defaultPath = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
-                          + "/dbi_output_" + QDateTime::currentDateTime().toString("yyyy-MM-dd_HH-mm-ss") + ".csv";
-    QString fileName = QFileDialog::getSaveFileName(this, "Save DBI Output", defaultPath, "CSV Files (*.csv)");
+                          + "/dbi_output_" + QDateTime::currentDateTime().toString("yyyy-MM-dd_HH-mm-ss") + ".txt";
+    QString fileName = QFileDialog::getSaveFileName(this, "Save DBI Output", defaultPath, "Text Files (*.txt)");
     if (fileName.isEmpty()) return;
 
     QFile file(fileName);
@@ -380,10 +380,11 @@ void MainWindow::onSaveCsv()
         return;
     }
     QTextStream out(&file);
-    for (int i = 0; i < dbiCopy.size(); ++i)
-        out << QString::number(dbiCopy[i]) << "\n";
+    out.setRealNumberPrecision(15);  // double全精度
+    for (int i = 0; i < dbiRaw.size(); ++i)
+        out << dbiRaw[i] << "\n";
     file.close();
-    onStatusUpdate(QString("DBI output saved: %1 pts → %2").arg(dbiCopy.size()).arg(fileName));
+    onStatusUpdate(QString("DBI output saved: %1 pts → %2").arg(dbiRaw.size()).arg(fileName));
 }
 
 void MainWindow::onPrevFrame()
