@@ -104,19 +104,15 @@ void UdpReceiver::readPendingDatagrams()
         arr.resize(mUdpSocket->pendingDatagramSize());
         mUdpSocket->readDatagram(arr.data(), arr.size(), &addr, &port);
 
-        // 协议层次识别：
+        // 协议层次识别（仅通过包长判断）：
         //   数据包: 1005字节 (4通道 × 192B + 间隔字节)
-        //   结束包: 23字节 (含 "eofeofeof" 标识)
+        //   结束包: 23字节 (采样数据结尾固定23字节，无其他此长度的包)
         if (arr.size() == 1005) {
-            QMutexLocker lock(&hub.pcapMutex);
             hub.pcapData.append(arr);
             dataPkts++;
-        } else if (arr.size() == 23 && arr.contains("eofeofeof")) {
+        } else if (arr.size() == 23) {
             // EOF包：追加到缓冲区并触发分析
-            {
-                QMutexLocker lock(&hub.pcapMutex);
-                hub.pcapData.append(arr);
-            }
+            hub.pcapData.append(arr);
             qDebug() << "UdpReceiver: EOF detected after" << dataPkts << "data pkts, total:" << hub.pcapData.size();
             emit hub.pcapDataReady();
         }
@@ -144,12 +140,9 @@ void UdpReceiver::onSendADCMessage(int sampleTimeNs)
     int pktNum = static_cast<int>(ceil((sampleTimeNs * 120.0 + LEN_CUT) / 192.0 / 16 / 3));
 
     // 清空上一轮数据
-    {
-        SimpleDataHub& hub = SimpleDataHub::instance();
-        QMutexLocker lock(&hub.pcapMutex);
-        hub.pcapData.clear();
-        hub.sampleTimeNs = sampleTimeNs;
-    }
+    SimpleDataHub& hub = SimpleDataHub::instance();
+    hub.pcapData.clear();
+    hub.sampleTimeNs = sampleTimeNs;
 
     // 构建协议包: "mv424" (hex: 6D76343234) + 3字节包数 (大端)
     QByteArray arr = QByteArray::fromHex("6D76343234");

@@ -5,9 +5,13 @@
 #include <QDebug>
 #include <QFile>
 #include <QTextStream>
-#include <QMutexLocker>
 #include <cmath>
 #include <limits>
+
+// 前置声明
+static void parseChannelData(const QVector<QByteArray>& pcapData,
+                             QByteArray& ch1, QByteArray& ch2,
+                             QByteArray& ch3, QByteArray& ch4);
 
 Analysis::Analysis(QObject *parent)
     : QObject(parent)
@@ -50,13 +54,9 @@ void Analysis::onPcapDataReady()
 {
     SimpleDataHub& hub = SimpleDataHub::instance();
 
-    // 从单例复制原始数据（加锁保护）
-    QVector<QByteArray> localPcap;
-    {
-        QMutexLocker lock(&hub.pcapMutex);
-        localPcap = hub.pcapData;
-        hub.pcapData.clear();
-    }
+    // 从单例复制原始数据
+    QVector<QByteArray> localPcap = hub.pcapData;
+    hub.pcapData.clear();
 
     if (localPcap.isEmpty()) {
         emit statusUpdate("Analysis: Empty pcap data");
@@ -64,30 +64,25 @@ void Analysis::onPcapDataReady()
     }
 
     emit statusUpdate(QString("Analysis: Processing %1 packets...").arg(localPcap.size()));
-    handleChannelData();
-    funcPcap();
-}
 
-// ====================== 通道数据解析 ======================
+    // 解析通道数据
+    parseChannelData(localPcap, ch1Data, ch2Data, ch3Data, ch4Data);
 
-void Analysis::handleChannelData()
-{
-    SimpleDataHub& hub = SimpleDataHub::instance();
-    QVector<QByteArray> localPcap;
-    {
-        // 注意: onPcapDataReady 已经清空了 pcapData，这里从已传入的 localPcap 处理
-        // 但 handleChannelData 需要访问 pcapData...
-        // 实际上我们在 onPcapDataReady 中已经拿到了 localPcap 的拷贝
-        // 需要重构: 改为从局部变量解析
+    int dataPktCount = 0;
+    for (const auto& p : localPcap) { if (p.size() == 1005) dataPktCount++; }
+
+    if (ch1Data.isEmpty() || ch2Data.isEmpty() || ch3Data.isEmpty() || ch4Data.isEmpty()) {
+        qWarning() << "Analysis: ADC channel data is empty!";
+        emit statusUpdate("Analysis: Error - No ADC data packets found");
+        return;
     }
-    ch1Data.clear();
-    ch2Data.clear();
-    ch3Data.clear();
-    ch4Data.clear();
 
-    // 从hub重新读取（onPcapDataReady中已clear，这里用之前复制的）
-    // 实际流程: onPcapDataReady 保存副本 → clear hub → 调用 handleChannelData(funcPcap 内部)
-    // 所以这里的处理流程需要调整...
+    emit statusUpdate(QString("Analysis: %1 data pkts → ch1=%2B ch2=%3B ch3=%4B ch4=%5B")
+        .arg(dataPktCount)
+        .arg(ch1Data.size()).arg(ch2Data.size())
+        .arg(ch3Data.size()).arg(ch4Data.size()));
+
+    funcPcap();
 }
 
 // 实际工作函数：传入本地pcapData副本进行处理
@@ -121,36 +116,6 @@ void Analysis::funcPcap()
 {
     SimpleDataHub& hub = SimpleDataHub::instance();
     double lo_freq[ch_num - 1] = { 34.4, 32 };
-
-    // 从hub获取数据副本并解析
-    QVector<QByteArray> localPcap;
-    {
-        QMutexLocker lock(&hub.pcapMutex);
-        localPcap = hub.pcapData;
-        hub.pcapData.clear();
-    }
-
-    if (localPcap.isEmpty()) {
-        qWarning() << "Analysis: pcap data is empty!";
-        emit statusUpdate("Analysis: Error - pcap data is empty");
-        return;
-    }
-
-    parseChannelData(localPcap, ch1Data, ch2Data, ch3Data, ch4Data);
-
-    int dataPktCount = 0;
-    for (const auto& p : localPcap) { if (p.size() == 1005) dataPktCount++; }
-
-    if (ch1Data.isEmpty() || ch2Data.isEmpty() || ch3Data.isEmpty() || ch4Data.isEmpty()) {
-        qWarning() << "Analysis: ADC channel data is empty!";
-        emit statusUpdate("Analysis: Error - No ADC data packets found");
-        return;
-    }
-
-    emit statusUpdate(QString("Analysis: %1 data pkts → ch1=%2B ch2=%3B ch3=%4B ch4=%5B")
-        .arg(dataPktCount)
-        .arg(ch1Data.size()).arg(ch2Data.size())
-        .arg(ch3Data.size()).arg(ch4Data.size()));
 
     // 计算数据长度
     int len_ch1 = ch1Data.size();
@@ -205,10 +170,7 @@ void Analysis::funcPcap()
     }
 
     // 写入SimpleDataHub
-    {
-        QMutexLocker lock(&hub.dbiMutex);
-        hub.dbiOutput = dbiVec;
-    }
+    hub.dbiOutput = dbiVec;
 
     // 后处理：分段+构建波形
     funcADC(dbiVec);
@@ -276,11 +238,8 @@ void Analysis::funcADC(const QVector<float>& adcData)
     }
 
     // 写入SimpleDataHub
-    {
-        QMutexLocker lock(&hub.oscMutex);
-        hub.OSCData.clear();
-        hub.OSCData.append(finalData);
-    }
+    hub.OSCData.clear();
+    hub.OSCData.append(finalData);
 
     if (finalData.isEmpty()) {
         emit statusUpdate("Analysis: Warning - No valid frames extracted");
@@ -288,17 +247,14 @@ void Analysis::funcADC(const QVector<float>& adcData)
     }
 
     // 构建首帧波形
-    {
-        QMutexLocker lock(&hub.waveMutex);
-        hub.waveData.clear();
-        float ftime = 0;
-        QVector<float> temp = finalData[0];
-        for (int var = 0; var < temp.size(); ++var) {
-            hub.waveData.append(std::make_pair(ftime, temp[var]));
-            ftime += fInterval;
-        }
-        hub.frameId = 0;
+    hub.waveData.clear();
+    float ftime = 0;
+    QVector<float> temp = finalData[0];
+    for (int var = 0; var < temp.size(); ++var) {
+        hub.waveData.append(std::make_pair(ftime, temp[var]));
+        ftime += fInterval;
     }
+    hub.frameId = 0;
 
     emit hub.waveDataReady();
 }
@@ -309,27 +265,18 @@ void Analysis::refreshCurrentFrame()
 {
     SimpleDataHub& hub = SimpleDataHub::instance();
 
-    QVector<QVector<float>> oscCopy;
-    int fid;
-    float fInterval;
-    {
-        QMutexLocker lock(&hub.oscMutex);
-        oscCopy = hub.OSCData;
-        fid = hub.frameId;
-        fInterval = hub.freqInterval;
-    }
+    QVector<QVector<float>> oscCopy = hub.OSCData;
+    int fid = hub.frameId;
+    float fInterval = hub.freqInterval;
 
     if (oscCopy.isEmpty() || fid < 0 || fid >= oscCopy.size()) return;
 
-    {
-        QMutexLocker lock(&hub.waveMutex);
-        hub.waveData.clear();
-        float ftime = 0;
-        QVector<float> temp = oscCopy[fid];
-        for (int var = 0; var < temp.size(); ++var) {
-            hub.waveData.append(std::make_pair(ftime, temp[var]));
-            ftime += fInterval;
-        }
+    hub.waveData.clear();
+    float ftime = 0;
+    QVector<float> temp = oscCopy[fid];
+    for (int var = 0; var < temp.size(); ++var) {
+        hub.waveData.append(std::make_pair(ftime, temp[var]));
+        ftime += fInterval;
     }
 
     emit hub.waveDataReady();
@@ -364,22 +311,16 @@ void Analysis::loadOscData(const QString& filePath)
     float timeInterval = std::pow(10.0f, -9) / samplingFrequency;
     float fInterval = static_cast<float>(timeInterval / (2 * M_PI * 4320) * std::pow(10.0, 15));
 
-    {
-        QMutexLocker lock(&hub.oscMutex);
-        hub.OSCData = loaded;
-    }
+    hub.OSCData = loaded;
     hub.freqInterval = fInterval;
     hub.frameId = 0;
 
-    {
-        QMutexLocker lock(&hub.waveMutex);
-        hub.waveData.clear();
-        float ftime = 0;
-        const QVector<float>& frame = loaded[0];
-        for (int i = 0; i < frame.size(); ++i) {
-            hub.waveData.append(std::make_pair(ftime, frame[i]));
-            ftime += fInterval;
-        }
+    hub.waveData.clear();
+    float ftime = 0;
+    const QVector<float>& frame = loaded[0];
+    for (int i = 0; i < frame.size(); ++i) {
+        hub.waveData.append(std::make_pair(ftime, frame[i]));
+        ftime += fInterval;
     }
 
     emit statusUpdate(QString("Loaded: %1 frames, %2 pts/frame")
@@ -410,10 +351,7 @@ void Analysis::loadDbiData(const QString& filePath)
 
     if (raw.isEmpty()) { emit statusUpdate("Empty file: " + filePath); return; }
 
-    {
-        QMutexLocker lock(&hub.dbiMutex);
-        hub.dbiOutput = raw;
-    }
+    hub.dbiOutput = raw;
 
     funcADC(raw);
     emit statusUpdate(QString("Loaded DBI: %1 pts, %2 frames")
@@ -423,10 +361,6 @@ void Analysis::loadDbiData(const QString& filePath)
 void Analysis::clearData()
 {
     SimpleDataHub& hub = SimpleDataHub::instance();
-    QMutexLocker lock1(&hub.pcapMutex);
-    QMutexLocker lock2(&hub.dbiMutex);
-    QMutexLocker lock3(&hub.oscMutex);
-    QMutexLocker lock4(&hub.waveMutex);
     hub.pcapData.clear();
     hub.dbiOutput.clear();
     hub.OSCData.clear();

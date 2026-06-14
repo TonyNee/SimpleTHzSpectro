@@ -11,8 +11,6 @@
 #include <QStandardPaths>
 #include <QApplication>
 #include <QSplitter>
-#include <QMutexLocker>
-#include <algorithm>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), m_isPlaying(false), m_processingNewData(false)
@@ -38,8 +36,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_autoPlayTimer->setInterval(83);  // 12 fps
     connect(m_autoPlayTimer, &QTimer::timeout, this, [this]() {
         SimpleDataHub& h = SimpleDataHub::instance();
-        int total;
-        { QMutexLocker lock(&h.oscMutex); total = h.OSCData.size(); }
+        int total = h.OSCData.size();
         if (total == 0) return;
         int nextId = (h.frameId + 1) % total;
         h.frameId = nextId;
@@ -78,8 +75,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_analysis->loadOscData("Config/nodata.csv");
     m_progressBar->setValue(0);
     m_progressBar->setFormat("Baseline");
-    int total;
-    { QMutexLocker lock(&hub.oscMutex); total = hub.OSCData.size(); }
+    int total = hub.OSCData.size();
     if (total > 1) {
         m_isPlaying = true;
         m_autoPlayTimer->start();
@@ -301,8 +297,7 @@ void MainWindow::onTriggerAdc()
 void MainWindow::onStop()
 {
     SimpleDataHub& hub = SimpleDataHub::instance();
-    int total;
-    { QMutexLocker lock(&hub.oscMutex); total = hub.OSCData.size(); }
+    int total = hub.OSCData.size();
 
     if (m_isPlaying) {
         m_autoPlayTimer->stop();
@@ -337,8 +332,7 @@ void MainWindow::onClear()
     m_analysis->loadOscData("Config/nodata.csv");
 
     SimpleDataHub& hub = SimpleDataHub::instance();
-    int total;
-    { QMutexLocker lock(&hub.oscMutex); total = hub.OSCData.size(); }
+    int total = hub.OSCData.size();
     if (total > 1) {
         m_isPlaying = true;
         m_autoPlayTimer->start();
@@ -364,8 +358,7 @@ void MainWindow::onPacketCountChanged(int count)
 void MainWindow::onSaveCsv()
 {
     SimpleDataHub& hub = SimpleDataHub::instance();
-    QVector<float> dbiCopy;
-    { QMutexLocker lock(&hub.dbiMutex); dbiCopy = hub.dbiOutput; }
+    QVector<float> dbiCopy = hub.dbiOutput;
 
     if (dbiCopy.isEmpty()) {
         onStatusUpdate("No DBI data to save. Trigger ADC first.");
@@ -393,8 +386,7 @@ void MainWindow::onPrevFrame()
 {
     if (m_isPlaying) { onStatusUpdate("Click Stop first."); return; }
     SimpleDataHub& hub = SimpleDataHub::instance();
-    int total;
-    { QMutexLocker lock(&hub.oscMutex); total = hub.OSCData.size(); }
+    int total = hub.OSCData.size();
     if (total == 0) { onStatusUpdate("No data."); return; }
     hub.frameId = (hub.frameId > 0) ? (hub.frameId - 1) : (total - 1);
     m_analysis->refreshCurrentFrame();
@@ -404,8 +396,7 @@ void MainWindow::onNextFrame()
 {
     if (m_isPlaying) { onStatusUpdate("Click Stop first."); return; }
     SimpleDataHub& hub = SimpleDataHub::instance();
-    int total;
-    { QMutexLocker lock(&hub.oscMutex); total = hub.OSCData.size(); }
+    int total = hub.OSCData.size();
     if (total == 0) { onStatusUpdate("No data."); return; }
     hub.frameId = (hub.frameId < total - 1) ? (hub.frameId + 1) : 0;
     m_analysis->refreshCurrentFrame();
@@ -415,8 +406,7 @@ void MainWindow::onFrameIdChanged(int id)
 {
     if (m_isPlaying) return;
     SimpleDataHub& hub = SimpleDataHub::instance();
-    int total;
-    { QMutexLocker lock(&hub.oscMutex); total = hub.OSCData.size(); }
+    int total = hub.OSCData.size();
     if (total == 0) return;
     if (id >= 0 && id < total) {
         hub.frameId = id;
@@ -427,14 +417,10 @@ void MainWindow::onFrameIdChanged(int id)
 void MainWindow::onWaveDataReady()
 {
     SimpleDataHub& hub = SimpleDataHub::instance();
-    {
-        QMutexLocker lock(&hub.waveMutex);
-        m_xyView->setdata(hub.waveData);
-    }
+    m_xyView->setdata(hub.waveData);
     updateFrameInfo();
 
-    int total;
-    { QMutexLocker lock(&hub.oscMutex); total = hub.OSCData.size(); }
+    int total = hub.OSCData.size();
     if (total > 0)
         m_labelStatus->setText(QString("%1Frame %2 / %3")
             .arg(m_isPlaying ? "[Auto] " : "").arg(hub.frameId).arg(total));
@@ -476,8 +462,7 @@ void MainWindow::onChooseFilterDir()
 void MainWindow::updateFrameInfo()
 {
     SimpleDataHub& hub = SimpleDataHub::instance();
-    int total;
-    { QMutexLocker lock(&hub.oscMutex); total = hub.OSCData.size(); }
+    int total = hub.OSCData.size();
     m_spinFrameId->blockSignals(true);
     m_spinFrameId->setMaximum(total > 0 ? total - 1 : 0);
     m_spinFrameId->setValue(hub.frameId);
