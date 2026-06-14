@@ -36,7 +36,7 @@ public:
     // ---- 参数 ----
     float freqInterval = 0.307012f;
     int frameId = 0;
-    int sampleTimeNs = 0;
+    int sampleTimeNs = 20000;  // 默认20µs
 
 signals:
     // 数据就绪信号（各工作线程通过单例发出，UI线程接收）

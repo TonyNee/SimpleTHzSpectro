@@ -133,7 +133,7 @@ void MainWindow::setupUI()
     topLayout->addWidget(new QLabel("Sample(µs):"));
     m_spinSampleTime = new QSpinBox();
     m_spinSampleTime->setRange(1, 100000);
-    m_spinSampleTime->setValue(5);
+    m_spinSampleTime->setValue(20);
     m_spinSampleTime->setMaximumWidth(85);
     topLayout->addWidget(m_spinSampleTime);
 
@@ -291,7 +291,9 @@ void MainWindow::onTriggerAdc()
     m_progressBar->setValue(0);
     m_progressBar->setFormat("Waiting for data...");
     int sampleTimeUs = m_spinSampleTime->value();
-    m_udpReceiver->sendADCMessage(sampleTimeUs * 1000);  // µs → ns
+    int sampleTimeNs = sampleTimeUs * 1000;
+    SimpleDataHub::instance().sampleTimeNs = sampleTimeNs;  // 同步更新hub
+    m_udpReceiver->sendADCMessage(sampleTimeNs);            // µs → ns
 }
 
 void MainWindow::onStop()
