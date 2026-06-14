@@ -27,9 +27,6 @@ public:
     // ---- DBI输出（帧分割前完整数据） ----
     QVector<float> dbiOutput;
 
-    // ---- ADC原始通道数据（3通道double，用于CSV导出） ----
-    QVector<QVector<double>> adcChannelData;
-
     // ---- 分段帧数据 ----
     QVector<QVector<float>> OSCData;
 

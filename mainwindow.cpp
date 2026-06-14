@@ -359,21 +359,17 @@ void MainWindow::onSaveCsv()
 {
     SimpleDataHub& hub = SimpleDataHub::instance();
 
-    // 检查ADC原始数据是否存在（参考源程序 writeAdcDataToCSV）
-    if (hub.adcChannelData.isEmpty() || hub.adcChannelData.size() < 3) {
-        onStatusUpdate("No ADC data to save. Trigger ADC first.");
-        return;
-    }
+    // 保存DBI输出数据（参考源程序 write_file(path_output_data, output_data)）
+    QVector<float> dbiCopy = hub.dbiOutput;
 
-    int len = hub.adcChannelData[0].size();
-    if (len == 0) {
-        onStatusUpdate("Empty ADC channel data.");
+    if (dbiCopy.isEmpty()) {
+        onStatusUpdate("No DBI data to save. Trigger ADC first.");
         return;
     }
 
     QString defaultPath = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
-                          + "/adc_data_ch1_" + QDateTime::currentDateTime().toString("yyyy-MM-dd_HH-mm-ss") + ".csv";
-    QString fileName = QFileDialog::getSaveFileName(this, "Save ADC Raw Data CSV", defaultPath, "CSV Files (*.csv)");
+                          + "/dbi_output_" + QDateTime::currentDateTime().toString("yyyy-MM-dd_HH-mm-ss") + ".csv";
+    QString fileName = QFileDialog::getSaveFileName(this, "Save DBI Output", defaultPath, "CSV Files (*.csv)");
     if (fileName.isEmpty()) return;
 
     QFile file(fileName);
@@ -382,15 +378,10 @@ void MainWindow::onSaveCsv()
         return;
     }
     QTextStream out(&file);
-    // 三列：ch1, ch2, ch3（与源程序 writeAdcDataToCSV 格式一致）
-    out << "ch1Data,ch2Data,ch3Data\n";
-    for (int i = 0; i < len; ++i) {
-        out << hub.adcChannelData[0][i] << ","
-            << hub.adcChannelData[1][i] << ","
-            << hub.adcChannelData[2][i] << "\n";
-    }
+    for (int i = 0; i < dbiCopy.size(); ++i)
+        out << QString::number(dbiCopy[i]) << "\n";
     file.close();
-    onStatusUpdate(QString("Saved %1 pts × 3 ch → %2").arg(len).arg(fileName));
+    onStatusUpdate(QString("DBI output saved: %1 pts → %2").arg(dbiCopy.size()).arg(fileName));
 }
 
 void MainWindow::onPrevFrame()

@@ -5,6 +5,7 @@
 #include <QDebug>
 #include <QFile>
 #include <QTextStream>
+#include <QDir>
 #include <cmath>
 #include <limits>
 
@@ -117,14 +118,17 @@ void Analysis::funcPcap()
     SimpleDataHub& hub = SimpleDataHub::instance();
     double lo_freq[ch_num - 1] = { 34.4, 32 };
 
-    // 计算数据长度
+    // *******************************   Way1: ADC sample data  *********************************** //
+
+    // 严格按源程序计算: len_out = sample_time(ns) * 120 GSa/s
+    int len_out = hub.sampleTimeNs * 120;
+    int num_pkt = static_cast<int>(ceil((len_out + len_cut) / 192.0 / 16 / ch_num));
+    int len_in = num_pkt * 192 * 16;  // each channel input length from ADC
+
+    // 获取每个通道的数据大小（字节数）
     int len_ch1 = ch1Data.size();
     int len_ch2 = ch2Data.size();
     int len_ch3 = ch4Data.size();
-
-    int len_in = len_ch1;
-    int num_pkt = len_in / 192;
-    int len_out = num_pkt * 192;
 
     // 分配内存并转换int8 → double
     double* adc_data[ch_num];
@@ -163,6 +167,8 @@ void Analysis::funcPcap()
         adc_data, len_out, len_in, w_miso, sync_delay,
         ft_before_mixer, ft_after_mixer, lo_freq);
 
+    emit statusUpdate(QString("DBI output length: %1 pts").arg(len_out));
+
     // 转换为float并归一化
     QVector<float> dbiVec;
     for (int i = 0; i < len_out; ++i) {
@@ -175,15 +181,24 @@ void Analysis::funcPcap()
     // 后处理：分段+构建波形
     funcADC(dbiVec);
 
-    // 保存ADC原始数据到hub（用于CSV导出，参考源程序 writeAdcDataToCSV）
-    hub.adcChannelData.clear();
-    for (int ch = 0; ch < ch_num; ch++) {
-        QVector<double> channelVec;
-        int len = (ch == 0) ? len_ch1 : (ch == 1) ? len_ch2 : len_ch3;
-        for (int i = 0; i < len; i++) {
-            channelVec.append(adc_data[ch][i]);
+    // 自动保存ADC原始数据到 Output/ 目录（参考源程序 writeAdcDataToCSV）
+    QDir outputDir("Output");
+    if (!outputDir.exists()) {
+        outputDir.mkpath(".");
+    }
+    QFile adcFile("Output/adc_data_ch1.csv");
+    if (adcFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QTextStream out(&adcFile);
+        out << "ch1Data,ch2Data,ch3Data\n";
+        for (int i = 0; i < len_ch1; ++i) {
+            out << adc_data[0][i] << ","
+                << adc_data[1][i] << ","
+                << adc_data[2][i] << "\n";
         }
-        hub.adcChannelData.append(channelVec);
+        adcFile.close();
+        emit statusUpdate("ADC data saved to Output/adc_data_ch1.csv");
+    } else {
+        emit statusUpdate("Error: Cannot write Output/adc_data_ch1.csv");
     }
 
     // 释放内存
