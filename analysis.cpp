@@ -127,14 +127,8 @@ void Analysis::funcPcap()
 
     // len_in 基于实际收到的数据，避免理论与实际不一致导致DBI越界崩溃
     int len_in = len_ch1;
-
-    // len_out = sample_time(ns) * 120 GSa/s，但需确保不超出DBI内部缓冲区
-    // DBI步骤8需要: len_out + sync_delay_max + 2000 <= len_dbi = len_in * ch_num
     int len_out_theoretical = hub.sampleTimeNs * 120;
     int len_out = len_out_theoretical;
-    if (len_out + 3000 > len_in * ch_num) {  // 3000 = sync_delay余量 + 2000
-        len_out = len_in * ch_num - 3000;    // 收缩到安全范围
-    }
 
     // 分配内存并转换int8 → double
     double* adc_data[ch_num];
