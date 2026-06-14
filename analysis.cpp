@@ -175,6 +175,17 @@ void Analysis::funcPcap()
     // 后处理：分段+构建波形
     funcADC(dbiVec);
 
+    // 保存ADC原始数据到hub（用于CSV导出，参考源程序 writeAdcDataToCSV）
+    hub.adcChannelData.clear();
+    for (int ch = 0; ch < ch_num; ch++) {
+        QVector<double> channelVec;
+        int len = (ch == 0) ? len_ch1 : (ch == 1) ? len_ch2 : len_ch3;
+        for (int i = 0; i < len; i++) {
+            channelVec.append(adc_data[ch][i]);
+        }
+        hub.adcChannelData.append(channelVec);
+    }
+
     // 释放内存
     for (int i = 0; i < ch_num; i++) { free(adc_data[i]); free(w_miso[i]); }
     for (int i = 0; i < ch_num - 1; i++) free(ft_after_mixer[i]);
