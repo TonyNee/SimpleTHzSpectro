@@ -96,30 +96,29 @@ void UdpReceiver::readPendingDatagrams()
     QHostAddress addr;
     quint16 port;
     QByteArray arr;
-    int dataPkts = 0;
+    QString dataString;
 
-    // 一次性读完所有待处理数据报，避免信号堆积
+    // 一次性读完所有待处理数据报，拼接后检测EOF标记（参考源程序逻辑）
     while (mUdpSocket->hasPendingDatagrams())
     {
         arr.resize(mUdpSocket->pendingDatagramSize());
         mUdpSocket->readDatagram(arr.data(), arr.size(), &addr, &port);
 
-        // 协议层次识别（仅通过包长判断）：
-        //   数据包: 1005字节 (4通道 × 192B + 间隔字节)
-        //   结束包: 23字节 (采样数据结尾固定23字节，无其他此长度的包)
-        if (arr.size() == 1005) {
-            hub.pcapData.append(arr);
-            dataPkts++;
-        } else if (arr.size() == 23) {
-            // EOF包：追加到缓冲区并触发分析
-            hub.pcapData.append(arr);
-            qDebug() << "UdpReceiver: EOF detected after" << dataPkts << "data pkts, total:" << hub.pcapData.size();
-            emit hub.pcapDataReady();
-        }
+        // 所有包（无论大小）都追加到缓冲区
+        hub.pcapData.append(arr);
+        // 同时拼接字符串用于EOF内容检测
+        dataString += QString::fromUtf8(arr.data());
     }
 
-    if (dataPkts > 0) {
-        emit packetCountChanged(hub.pcapData.size());
+    int totalPkts = hub.pcapData.size();
+    if (totalPkts > 0) {
+        emit packetCountChanged(totalPkts);
+    }
+
+    // 通过内容检测EOF标记（参考源程序: 检查 "EOF\r\n" 或 "eofeofeof"）
+    if (dataString.endsWith("EOF\r\n") || dataString.contains("eofeofeof")) {
+        qDebug() << "UdpReceiver: EOF detected, total pkts:" << totalPkts;
+        emit hub.pcapDataReady();
     }
 }
 
