@@ -127,10 +127,17 @@ void Analysis::funcPcap()
     int len_ch2 = ch2Data.size();
     int len_ch3 = ch4Data.size();
 
-    // 严格按源程序: len_out = sample_time(ns) * 120 GSa/s
-    int len_out = hub.sampleTimeNs * 120;
-    int num_pkt = static_cast<int>(ceil((len_out + len_cut) / 192.0 / 16 / ch_num));
-    int len_in = num_pkt * 192 * 16;  // each channel input length from ADC
+    // len_in 基于实际收到的数据（actual=800064 vs 理论=800500，避免DBI越界）
+    int len_in = len_ch1;
+
+    // 源程序: len_out = sample_time(ns) * 120 GSa/s
+    // DBI步骤8约束: len_out + sync_delay_max + 2000 <= len_dbi = len_in * ch_num
+    // 理论值与实际值偏差时需收缩，否则步骤8访问 dbi_eq 越界
+    int len_out_theoretical = hub.sampleTimeNs * 120;
+    int len_out = len_out_theoretical;
+    if (len_out + 3000 > len_in * ch_num) {     // 3000 = sync_delay余量 + 2000
+        len_out = len_in * ch_num - 3000;       // 收缩到安全范围
+    }
 
     // 分配内存并转换int8 → double
     double* adc_data[ch_num];
@@ -240,49 +247,24 @@ void Analysis::funcADC(const QVector<float>& adcData)
 {
     SimpleDataHub& hub = SimpleDataHub::instance();
 
-    // 每2400点找一次峰值位置（帧同步）
-    std::vector<int> maxIndices;
-    int count = 0;
-    float maxValue = std::numeric_limits<float>::lowest();
-    int maxIndex = -1;
-
-    for (int i = 0; i < adcData.size(); ++i) {
-        float value = adcData[i];
-        if (value > maxValue) { maxValue = value; maxIndex = count; }
-        count++;
-        if (count % 2400 == 0) {
-            maxIndices.push_back(maxIndex);
-            maxValue = std::numeric_limits<float>::lowest();
-            maxIndex = -1;
-        }
-    }
-    if (count % 2400 != 0) maxIndices.push_back(maxIndex);
-
-    // 频率参数
-    float calibratinFreq = 370.0f;
+    // 频率参数（用于波形x轴显示）
     float samplingFrequency = 120.0f;
     float timeInterval = std::pow(10.0f, -9) / samplingFrequency;
     float fInterval = static_cast<float>(timeInterval / (2 * M_PI * 4320) * std::pow(10.0, 15));
     hub.freqInterval = fInterval;
 
-    int dLeft = static_cast<int>((calibratinFreq - 200) / fInterval + 1);
-    int dRight = static_cast<int>((910 - calibratinFreq) / fInterval + 1);
-    int zeroC = static_cast<int>(200 / fInterval);
+    // 每2400点直接分割为一帧，末尾不足2400点丢弃
+    const int frameSize = 2400;
+    int totalFrames = adcData.size() / frameSize;
 
     QVector<QVector<float>> finalData;
-    QVector<float> bu(zeroC, 0.0f);
-
-    for (int m = static_cast<int>(maxIndices.size() * 0.1);
-         m < static_cast<int>(maxIndices.size()); ++m) {
-        int lc = maxIndices[m];
-        int lLeft = lc + dLeft;
-        int lRight = lc - dRight;
-        if (lRight < 0 || lLeft > adcData.size() - 1) continue;
-
-        QVector<float> data;
-        data.append(bu);
-        for (int n = lLeft; n >= lRight; --n) data.append(adcData[n]);
-        finalData.append(data);
+    for (int f = 0; f < totalFrames; ++f) {
+        QVector<float> frame;
+        int start = f * frameSize;
+        for (int i = 0; i < frameSize; ++i) {
+            frame.append(adcData[start + i]);
+        }
+        finalData.append(frame);
     }
 
     // 写入SimpleDataHub
@@ -297,13 +279,15 @@ void Analysis::funcADC(const QVector<float>& adcData)
     // 构建首帧波形
     hub.waveData.clear();
     float ftime = 0;
-    QVector<float> temp = finalData[0];
+    const QVector<float>& temp = finalData[0];
     for (int var = 0; var < temp.size(); ++var) {
         hub.waveData.append(std::make_pair(ftime, temp[var]));
         ftime += fInterval;
     }
     hub.frameId = 0;
 
+    emit statusUpdate(QString("Segmentation: %1 frames (2400 pts/frame), %2 pts discarded")
+        .arg(totalFrames).arg(adcData.size() % frameSize));
     emit hub.waveDataReady();
 }
 
